@@ -25,6 +25,28 @@ make install
 make renardo
 ```
 
+Deterministic startup (recommended on this machine):
+
+```bash
+make renardo-boot
+```
+
+This command:
+- ensures SC extension files exist
+- reapplies local compatibility patches
+- clears stale `renardo` / `sclang` / `scsynth` processes
+- boots `renardo -p -b` ready for song loading
+
+Auto-boot and auto-load a specific song:
+
+```bash
+make play SONG=songs/2026-02-17_boten_anna_handsup.py
+```
+
+`SONG` also accepts:
+- a bare song file in `songs/`, e.g. `SONG=2026-02-17_switch_angel_trance.py`
+- a name without extension, e.g. `SONG=2026-02-17_switch_angel_trance`
+
 If `renardo` is not on your PATH, use:
 
 ```bash
