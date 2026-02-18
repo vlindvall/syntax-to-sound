@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: venv install app test-app renardo renardo-boot renardo-prepare play new-song
+.PHONY: venv install app test-app renardo renardo-boot renardo-prepare play live new-song
 
 venv:
 	$(PYTHON) -m venv .venv
@@ -29,6 +29,13 @@ play:
 		exit 1; \
 	fi
 	SONG="$(SONG)" bash tools/renardo_boot.sh
+
+live:
+	@if [ -z "$(SONG)" ]; then \
+		echo "Usage: make live SONG=songs/2026-02-17_boten_anna_handsup.py"; \
+		exit 1; \
+	fi
+	SONG="$(SONG)" bash tools/live_play.sh
 
 new-song:
 	@if [ -z "$(NAME)" ]; then \

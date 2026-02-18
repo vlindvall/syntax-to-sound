@@ -80,6 +80,25 @@ Auto-boot and auto-load a specific song:
 make play SONG=songs/2026-02-17_boten_anna_handsup.py
 ```
 
+`SONG` also accepts:
+- a bare song file in `songs/`, e.g. `SONG=2026-02-17_switch_angel_trance.py`
+- a name without extension, e.g. `SONG=2026-02-17_switch_angel_trance`
+
+Live coding mode with auto-reload on file save:
+
+```bash
+make live SONG=songs/2026-02-17_boten_anna_handsup.py
+```
+
+In live mode, the song file is re-executed automatically when it changes, so I can edit the file from chat and you hear updates immediately.
+
+If `renardo` is not on your PATH, use:
+
+```bash
+source .venv/bin/activate
+python -m renardo
+```
+
 ## Create a new song sketch
 
 ```bash
