@@ -1,22 +1,76 @@
-const statusLine = document.getElementById('statusLine');
-const settingsStatus = document.getElementById('settingsStatus');
-const messages = document.getElementById('messages');
-const eventsBox = document.getElementById('eventsBox');
-let traceList = document.getElementById('traceList');
-const traceEntries = [];
-let sessionId = null;
+const dom = {
+  statusLine: document.getElementById('statusLine'),
+  settingsStatus: document.getElementById('settingsStatus'),
+  messages: document.getElementById('messages'),
+  activityLog: document.getElementById('activityLog'),
+  eventsBox: document.getElementById('eventsBox'),
+  runtimeState: document.getElementById('runtimeState'),
+  sessionState: document.getElementById('sessionState'),
+  eventsState: document.getElementById('eventsState'),
+  traceList: document.getElementById('traceList'),
+  troubleshootCard: document.getElementById('troubleshootCard'),
+  troubleshootSummary: document.getElementById('troubleshootSummary'),
+  troubleshootBudget: document.getElementById('troubleshootBudget'),
+  troubleshootBtn: document.getElementById('troubleshootBtn'),
+  applyFixBtn: document.getElementById('applyFixBtn'),
+  dismissFixBtn: document.getElementById('dismissFixBtn'),
+};
 
-function logMessage(kind, text) {
+const uiState = {
+  sessionId: null,
+  runtime: 'idle',
+  sse: 'connecting',
+  troubleshootLimit: 3,
+  troubleshootUsed: 0,
+  failedTurn: null,
+  repairedCommands: null,
+};
+
+const traceEntries = [];
+
+function setRuntimeState(nextRuntime) {
+  uiState.runtime = nextRuntime;
+  renderStatus();
+}
+
+function setSseState(nextSse) {
+  uiState.sse = nextSse;
+  renderStatus();
+}
+
+function setSessionId(sessionId) {
+  uiState.sessionId = sessionId;
+  renderStatus();
+}
+
+function renderStatus() {
+  if (dom.runtimeState) dom.runtimeState.textContent = uiState.runtime;
+  if (dom.sessionState) dom.sessionState.textContent = uiState.sessionId ? uiState.sessionId.slice(0, 8) : 'n/a';
+  if (dom.eventsState) dom.eventsState.textContent = uiState.sse;
+  if (dom.statusLine) {
+    const suffix = uiState.sessionId ? ` (${uiState.sessionId})` : '';
+    dom.statusLine.textContent = `Status: ${uiState.runtime}${suffix}`;
+  }
+}
+
+function appendLog(container, kind, text) {
+  if (!container) return;
   const el = document.createElement('div');
   el.className = `msg ${kind}`;
   el.textContent = text;
-  messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
+function logMessage(kind, text) {
+  appendLog(dom.messages, kind, text);
+  appendLog(dom.activityLog, kind, text);
 }
 
 function logEvent(text) {
-  eventsBox.textContent += `${new Date().toLocaleTimeString()} ${text}\n`;
-  eventsBox.scrollTop = eventsBox.scrollHeight;
+  if (!dom.eventsBox) return;
+  dom.eventsBox.textContent += `${new Date().toLocaleTimeString()} ${text}\n`;
+  dom.eventsBox.scrollTop = dom.eventsBox.scrollHeight;
 }
 
 async function api(path, options = {}) {
@@ -32,9 +86,10 @@ async function api(path, options = {}) {
 }
 
 async function boot() {
+  setRuntimeState('booting');
   const data = await api('/api/runtime/boot', { method: 'POST' });
-  sessionId = data.session_id;
-  statusLine.textContent = `Status: ${data.status} (${sessionId})`;
+  setSessionId(data.session_id);
+  setRuntimeState(data.status);
   logMessage('system', `Boot: ${data.status}`);
   await loadLLMSettings();
 }
@@ -53,21 +108,33 @@ async function loadSong() {
   logMessage('system', `Loaded: ${path}`);
 }
 
-async function sendPrompt() {
-  if (!sessionId) await boot();
-  const prompt = document.getElementById('promptInput').value.trim();
+async function sendPrompt(promptOverride = '', intentOverride = '') {
+  if (!uiState.sessionId) await boot();
+  const promptInput = document.getElementById('promptInput');
+  const prompt = (promptOverride || promptInput.value).trim();
   if (!prompt) return;
-  const intent = document.getElementById('intentInput').value;
+  const intent = intentOverride || document.getElementById('intentInput').value;
+
   logMessage('user', prompt);
-  const requestBody = { session_id: sessionId, prompt, intent };
+  const requestBody = { session_id: uiState.sessionId, prompt, intent };
   const data = await callChatTurn('chat', requestBody);
   const result = formatTurnResult(data);
   logMessage('system', `${result} (${data.latency_ms}ms)`);
   logNormalizationInfo(data);
+  handleTurnFailureState(data, requestBody);
+
+  if (!promptOverride) {
+    promptInput.value = '';
+  }
+}
+
+async function sendQuickPrompt(prompt) {
+  const intent = prompt.toLowerCase().includes('new scene') ? 'new_scene' : 'edit';
+  await sendPrompt(prompt, intent);
 }
 
 async function applyMixer() {
-  if (!sessionId) await boot();
+  if (!uiState.sessionId) await boot();
   const ampValue = Number(document.getElementById('p1_amp').value);
   const commands = [
     { op: 'player_set', player: 'p1', param: 'amp', value: ampValue },
@@ -76,22 +143,129 @@ async function applyMixer() {
     { op: 'player_set', player: 'p1', param: 'pan', value: Number(document.getElementById('p1_pan').value) },
   ];
   const mixerTurn = await callChatTurn('mixer', {
-    session_id: sessionId,
+    session_id: uiState.sessionId,
     prompt: JSON.stringify(commands),
     intent: 'mix_fix',
   });
   logMessage('system', formatTurnResult(mixerTurn));
   logNormalizationInfo(mixerTurn);
+  hideTroubleshootCard();
   if (ampValue === 0) logMessage('system', 'P1 muted (amp=0)');
 }
 
 async function setBpm() {
-  if (!sessionId) await boot();
+  if (!uiState.sessionId) await boot();
   const bpm = Number(document.getElementById('bpmInput').value);
   const prompt = `Set bpm to ${bpm}`;
-  const data = await callChatTurn('bpm', { session_id: sessionId, prompt, intent: 'edit' });
+  const data = await callChatTurn('bpm', { session_id: uiState.sessionId, prompt, intent: 'edit' });
   logMessage('system', formatTurnResult(data));
   logNormalizationInfo(data);
+  handleTurnFailureState(data, { prompt, intent: 'edit' });
+}
+
+function failureType(data) {
+  const errors = data.validation?.errors || [];
+  const merged = [data.model || '', ...errors, ...(data.normalization_notes || [])].join(' ').toLowerCase();
+  if (data.apply_status === 'failed') return 'runtime';
+  if (merged.includes('all llm backends failed') || merged.includes('openai') || merged.includes('codex')) {
+    return 'backend';
+  }
+  if (data.apply_status === 'skipped' && data.validation && !data.validation.valid) {
+    return 'validation';
+  }
+  return 'none';
+}
+
+function handleTurnFailureState(data, requestBody) {
+  if (data.apply_status === 'applied') {
+    hideTroubleshootCard();
+    return;
+  }
+
+  const type = failureType(data);
+  const errors = data.validation?.errors || [];
+  uiState.failedTurn = {
+    prompt: requestBody.prompt,
+    intent: requestBody.intent,
+    failedCommands: data.effective_commands?.length ? data.effective_commands : (data.commands || []),
+    validationErrors: errors,
+    type,
+    patchId: data.patch_id,
+  };
+  uiState.repairedCommands = null;
+  renderTroubleshootCard();
+}
+
+function renderTroubleshootCard(extraSummary = '') {
+  if (!dom.troubleshootCard || !uiState.failedTurn) return;
+
+  const type = uiState.failedTurn.type;
+  let summary = 'Could not apply that change.';
+  if (type === 'backend') {
+    summary = 'Model backend unavailable. Open Inspect > LLM Settings, then retry.';
+  } else if (type === 'runtime') {
+    summary = 'Runtime apply failed. Try Boot, then retry.';
+  } else if (type === 'validation') {
+    summary = 'Generated commands failed validation. You can run guided diagnose/fix.';
+  }
+  if (extraSummary) summary = `${summary} ${extraSummary}`;
+
+  if (dom.troubleshootSummary) dom.troubleshootSummary.textContent = summary;
+  if (dom.troubleshootBudget) {
+    const remaining = Math.max(0, uiState.troubleshootLimit - uiState.troubleshootUsed);
+    dom.troubleshootBudget.textContent = `Troubleshoot credits remaining: ${remaining}/${uiState.troubleshootLimit}`;
+  }
+  if (dom.troubleshootBtn) {
+    const canTroubleshoot = type === 'validation' && uiState.troubleshootUsed < uiState.troubleshootLimit;
+    dom.troubleshootBtn.disabled = !canTroubleshoot;
+  }
+  if (dom.applyFixBtn) {
+    dom.applyFixBtn.classList.toggle('hidden', !uiState.repairedCommands);
+  }
+  dom.troubleshootCard.classList.remove('hidden');
+}
+
+function hideTroubleshootCard() {
+  uiState.failedTurn = null;
+  uiState.repairedCommands = null;
+  if (dom.troubleshootCard) dom.troubleshootCard.classList.add('hidden');
+}
+
+async function runTroubleshoot() {
+  if (!uiState.failedTurn || !uiState.sessionId) return;
+  if (uiState.failedTurn.type !== 'validation') return;
+  const payload = await api('/api/chat/troubleshoot', {
+    method: 'POST',
+    body: JSON.stringify({
+      session_id: uiState.sessionId,
+      prompt: uiState.failedTurn.prompt,
+      intent: uiState.failedTurn.intent,
+      failed_commands: uiState.failedTurn.failedCommands,
+      validation_errors: uiState.failedTurn.validationErrors,
+    }),
+  });
+  uiState.troubleshootUsed = payload.budget?.used || uiState.troubleshootUsed + 1;
+  uiState.troubleshootLimit = payload.budget?.limit || uiState.troubleshootLimit;
+  uiState.repairedCommands = payload.fixed_commands || [];
+
+  const confidence = typeof payload.confidence === 'number' ? ` (confidence ${Math.round(payload.confidence * 100)}%)` : '';
+  const reason = payload.reason ? `Reason: ${payload.reason}.` : 'A safe fix was generated.';
+  renderTroubleshootCard(`${reason}${confidence}`);
+  logMessage('system', `Troubleshoot ready: generated ${uiState.repairedCommands.length} fixed command(s).`);
+}
+
+async function applyRepairedCommands() {
+  if (!uiState.repairedCommands || !uiState.repairedCommands.length || !uiState.sessionId || !uiState.failedTurn) return;
+  const requestBody = {
+    session_id: uiState.sessionId,
+    prompt: JSON.stringify(uiState.repairedCommands),
+    intent: uiState.failedTurn.intent,
+  };
+  const data = await callChatTurn('repair-apply', requestBody);
+  const result = formatTurnResult(data);
+  logMessage('system', `${result} (${data.latency_ms}ms)`);
+  logNormalizationInfo(data);
+  handleTurnFailureState(data, requestBody);
 }
 
 function formatTurnResult(data) {
@@ -127,7 +301,6 @@ async function callChatTurn(origin, requestBody) {
     addTraceEntry({
       origin,
       startedAt,
-      path,
       requestBody,
       responseBody: data,
     });
@@ -136,7 +309,6 @@ async function callChatTurn(origin, requestBody) {
     addTraceEntry({
       origin,
       startedAt,
-      path,
       requestBody,
       error: err.message,
     });
@@ -146,12 +318,11 @@ async function callChatTurn(origin, requestBody) {
 
 function addTraceEntry(entry) {
   traceEntries.unshift(entry);
-  const list = ensureTraceList();
-  if (!list) return;
+  if (!dom.traceList) return;
 
   const details = document.createElement('details');
   details.className = 'trace-item';
-  details.open = true;
+  details.open = false;
 
   const summary = document.createElement('summary');
   summary.textContent = buildTraceSummary(entry);
@@ -186,46 +357,7 @@ function addTraceEntry(entry) {
   }
 
   details.appendChild(content);
-  list.prepend(details);
-}
-
-function ensureTraceList() {
-  if (traceList) return traceList;
-
-  const chatPanel = document.querySelector('.panel.chat');
-  if (!chatPanel) return null;
-
-  let wrap = chatPanel.querySelector('.trace-wrap');
-  if (!wrap) {
-    wrap = document.createElement('div');
-    wrap.className = 'trace-wrap';
-
-    const title = document.createElement('h3');
-    title.textContent = 'Command Trace';
-    wrap.appendChild(title);
-
-    traceList = document.createElement('div');
-    traceList.id = 'traceList';
-    traceList.className = 'trace-list';
-    wrap.appendChild(traceList);
-
-    const inputRow = chatPanel.querySelector('.row');
-    if (inputRow) {
-      chatPanel.insertBefore(wrap, inputRow);
-    } else {
-      chatPanel.appendChild(wrap);
-    }
-    return traceList;
-  }
-
-  traceList = wrap.querySelector('#traceList');
-  if (!traceList) {
-    traceList = document.createElement('div');
-    traceList.id = 'traceList';
-    traceList.className = 'trace-list';
-    wrap.appendChild(traceList);
-  }
-  return traceList;
+  dom.traceList.prepend(details);
 }
 
 function traceToPlainText(entry) {
@@ -320,7 +452,7 @@ async function saveLLMSettings() {
 }
 
 function setSettingsStatus(text) {
-  if (settingsStatus) settingsStatus.textContent = text;
+  if (dom.settingsStatus) dom.settingsStatus.textContent = text;
 }
 
 function updateSettingsDisclosure(backend) {
@@ -338,7 +470,6 @@ function updateSettingsDisclosure(backend) {
     advanced.open = true;
     return;
   }
-  // auto: show key and keep codex controls optional via collapsed advanced details
   apiKeyRow.classList.remove('hidden');
   advanced.classList.remove('hidden');
   advanced.open = false;
@@ -376,16 +507,17 @@ function formatPayload(payload) {
 }
 
 async function undoLast() {
-  if (!sessionId) return;
+  if (!uiState.sessionId) return;
   const data = await api('/api/patch/undo', {
     method: 'POST',
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify({ session_id: uiState.sessionId }),
   });
   logMessage('system', `Undo ok for patch ${data.reverted_patch_id}`);
 }
 
 function connectEvents() {
   const stream = new EventSource('/api/events/stream');
+  stream.onopen = () => setSseState('connected');
   stream.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
@@ -394,52 +526,99 @@ function connectEvents() {
       logEvent(event.data);
     }
   };
-  stream.onerror = () => logEvent('event stream disconnected');
-}
-
-document.getElementById('bootBtn').onclick = () => boot().catch((e) => logMessage('system', e.message));
-document.getElementById('stopBtn').onclick = () => stop().catch((e) => logMessage('system', e.message));
-document.getElementById('loadBtn').onclick = () => loadSong().catch((e) => logMessage('system', e.message));
-document.getElementById('sendBtn').onclick = () => sendPrompt().catch((e) => logMessage('system', e.message));
-document.getElementById('applyMixerBtn').onclick = () => applyMixer().catch((e) => logMessage('system', e.message));
-document.getElementById('bpmBtn').onclick = () => setBpm().catch((e) => logMessage('system', e.message));
-document.getElementById('undoBtn').onclick = () => undoLast().catch((e) => logMessage('system', e.message));
-document.getElementById('refreshSettingsBtn').onclick = () =>
-  loadLLMSettings().catch((e) => logMessage('system', e.message));
-document.getElementById('saveSettingsBtn').onclick = () =>
-  saveLLMSettings().catch((e) => logMessage('system', e.message));
-document.getElementById('llmBackend').onchange = (e) =>
-  updateSettingsDisclosure(e.target.value);
-const clearTraceBtn = document.getElementById('clearTraceBtn');
-if (clearTraceBtn) {
-  clearTraceBtn.onclick = () => {
-    const list = ensureTraceList();
-    if (list) list.textContent = '';
-    traceEntries.length = 0;
-  };
-}
-const copyLastTraceBtn = document.getElementById('copyLastTraceBtn');
-if (copyLastTraceBtn) {
-  copyLastTraceBtn.onclick = () => {
-    if (!traceEntries.length) {
-      logMessage('system', 'No trace entries to copy');
-      return;
-    }
-    copyText(traceToPlainText(traceEntries[0])).catch((e) => logMessage('system', e.message));
-  };
-}
-const copyAllTraceBtn = document.getElementById('copyAllTraceBtn');
-if (copyAllTraceBtn) {
-  copyAllTraceBtn.onclick = () => {
-    if (!traceEntries.length) {
-      logMessage('system', 'No trace entries to copy');
-      return;
-    }
-    const payload = traceEntries.map(traceToPlainText).join('\n\n');
-    copyText(payload).catch((e) => logMessage('system', e.message));
+  stream.onerror = () => {
+    setSseState('reconnecting');
+    logEvent('event stream disconnected');
   };
 }
 
+function switchView(viewName) {
+  document.querySelectorAll('.view').forEach((view) => {
+    const shouldShow = view.id === `view-${viewName}`;
+    view.classList.toggle('hidden', !shouldShow);
+  });
+  document.querySelectorAll('.mode-btn').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.view === viewName);
+  });
+}
+
+function initModeNav() {
+  document.querySelectorAll('.mode-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+}
+
+function initActions() {
+  document.getElementById('bootBtn').onclick = () => boot().catch((e) => {
+    setRuntimeState('error');
+    logMessage('system', e.message);
+  });
+  document.getElementById('stopBtn').onclick = () => stop().catch((e) => logMessage('system', e.message));
+  document.getElementById('loadBtn').onclick = () => loadSong().catch((e) => logMessage('system', e.message));
+  document.getElementById('sendBtn').onclick = () => sendPrompt().catch((e) => logMessage('system', e.message));
+  document.getElementById('applyMixerBtn').onclick = () => applyMixer().catch((e) => logMessage('system', e.message));
+  document.getElementById('bpmBtn').onclick = () => setBpm().catch((e) => logMessage('system', e.message));
+  document.getElementById('undoBtn').onclick = () => undoLast().catch((e) => logMessage('system', e.message));
+  document.getElementById('refreshSettingsBtn').onclick = () =>
+    loadLLMSettings().catch((e) => logMessage('system', e.message));
+  document.getElementById('saveSettingsBtn').onclick = () =>
+    saveLLMSettings().catch((e) => logMessage('system', e.message));
+  document.getElementById('llmBackend').onchange = (e) => updateSettingsDisclosure(e.target.value);
+
+  document.querySelectorAll('.quickPromptBtn').forEach((btn) => {
+    btn.onclick = () => sendQuickPrompt(btn.dataset.prompt).catch((e) => logMessage('system', e.message));
+  });
+
+  const clearTraceBtn = document.getElementById('clearTraceBtn');
+  if (clearTraceBtn) {
+    clearTraceBtn.onclick = () => {
+      if (dom.traceList) dom.traceList.textContent = '';
+      traceEntries.length = 0;
+    };
+  }
+
+  const copyLastTraceBtn = document.getElementById('copyLastTraceBtn');
+  if (copyLastTraceBtn) {
+    copyLastTraceBtn.onclick = () => {
+      if (!traceEntries.length) {
+        logMessage('system', 'No trace entries to copy');
+        return;
+      }
+      copyText(traceToPlainText(traceEntries[0])).catch((e) => logMessage('system', e.message));
+    };
+  }
+
+  const copyAllTraceBtn = document.getElementById('copyAllTraceBtn');
+  if (copyAllTraceBtn) {
+    copyAllTraceBtn.onclick = () => {
+      if (!traceEntries.length) {
+        logMessage('system', 'No trace entries to copy');
+        return;
+      }
+      const payload = traceEntries.map(traceToPlainText).join('\n\n');
+      copyText(payload).catch((e) => logMessage('system', e.message));
+    };
+  }
+
+  if (dom.troubleshootBtn) {
+    dom.troubleshootBtn.onclick = () => runTroubleshoot().catch((e) => {
+      logMessage('system', `Troubleshoot failed: ${e.message}`);
+      renderTroubleshootCard();
+    });
+  }
+  if (dom.applyFixBtn) {
+    dom.applyFixBtn.onclick = () => applyRepairedCommands().catch((e) => logMessage('system', e.message));
+  }
+  if (dom.dismissFixBtn) {
+    dom.dismissFixBtn.onclick = () => hideTroubleshootCard();
+  }
+}
+
+renderStatus();
+initModeNav();
+initActions();
 connectEvents();
-ensureTraceList();
-boot().catch((e) => logMessage('system', e.message));
+boot().catch((e) => {
+  setRuntimeState('error');
+  logMessage('system', e.message);
+});

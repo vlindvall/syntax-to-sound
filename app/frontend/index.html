@@ -7,102 +7,154 @@
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
-    <main class="layout">
-      <section class="panel transport">
-        <h1>AI DJ</h1>
-        <p class="subtitle">human -> ui -> llm -> renardo</p>
-        <div class="row">
-          <button id="bootBtn">Boot</button>
-          <button id="stopBtn">Stop</button>
-          <button id="undoBtn">Undo Last</button>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>AI DJ</h1>
+          <p class="subtitle">live control with safe command patches</p>
         </div>
-        <div class="row">
-          <input id="songPath" value="songs/2026-02-17_boten_anna_handsup.py" />
-          <button id="loadBtn">Load Song</button>
+        <div class="status-cluster">
+          <div class="status-pill"><span>Runtime</span><strong id="runtimeState">idle</strong></div>
+          <div class="status-pill"><span>Session</span><strong id="sessionState">n/a</strong></div>
+          <div class="status-pill"><span>Events</span><strong id="eventsState">connecting</strong></div>
         </div>
-        <div class="row">
-          <label for="bpmInput">BPM</label>
-          <input id="bpmInput" type="number" min="50" max="220" value="120" />
-          <button id="bpmBtn">Set</button>
-        </div>
-        <div class="settings-wrap">
-          <h3>LLM Settings</h3>
-          <p class="settings-help">Quick mode: use <code>auto</code> (tries codex-cli, then OpenAI API). If both fail, the app asks for prompt edits.</p>
-          <div class="row">
-            <label for="llmBackend">Backend</label>
-            <select id="llmBackend">
-              <option value="auto">auto</option>
-              <option value="openai-api">openai-api</option>
-              <option value="codex-cli">codex-cli</option>
-            </select>
-          </div>
-          <div class="row">
-            <label for="llmModel">Model</label>
-            <input id="llmModel" placeholder="gpt-5.2-codex" />
-          </div>
-          <div class="row" id="apiKeyRow">
-            <label for="llmApiKey">OpenAI Key</label>
-            <input id="llmApiKey" type="password" placeholder="sk-..." />
-          </div>
-          <details id="advancedSettings" class="advanced-settings">
-            <summary>Advanced (Codex CLI)</summary>
+      </header>
+
+      <nav class="mode-nav">
+        <button class="mode-btn is-active" data-view="perform">Perform</button>
+        <button class="mode-btn" data-view="create">Create</button>
+        <button class="mode-btn" data-view="inspect">Inspect</button>
+      </nav>
+
+      <section id="view-perform" class="view is-active">
+        <div class="layout">
+          <section class="panel">
+            <h2>Transport</h2>
             <div class="row">
-              <label for="codexCommand">Codex CLI Cmd</label>
-              <input id="codexCommand" placeholder="codex exec" />
+              <button id="bootBtn">Boot</button>
+              <button id="stopBtn">Panic Stop</button>
+              <button id="undoBtn">Undo Last</button>
             </div>
             <div class="row">
-              <label for="codexModel">Codex CLI Model</label>
-              <input id="codexModel" placeholder="gpt-5.2-codex" />
+              <input id="songPath" value="songs/2026-02-17_boten_anna_handsup.py" />
+              <button id="loadBtn">Load Song</button>
             </div>
-          </details>
-          <div class="row">
-            <button id="refreshSettingsBtn" class="secondary">Refresh Settings</button>
-            <button id="saveSettingsBtn">Save Settings</button>
-          </div>
-          <p id="settingsStatus" class="subtitle">LLM settings: loading...</p>
-        </div>
-        <p id="statusLine">Status: idle</p>
-      </section>
+            <div class="row">
+              <label for="bpmInput">BPM</label>
+              <input id="bpmInput" type="number" min="50" max="220" value="120" />
+              <button id="bpmBtn">Set</button>
+            </div>
+            <p id="statusLine" class="subtitle">Status: idle</p>
+          </section>
 
-      <section class="panel chat">
-        <div class="panel-head">
-          <h2>DJ Chat</h2>
-          <div class="trace-actions">
-            <button id="copyLastTraceBtn" class="secondary">Copy Last</button>
-            <button id="copyAllTraceBtn" class="secondary">Copy All</button>
-            <button id="clearTraceBtn" class="secondary">Clear Trace</button>
-          </div>
-        </div>
-        <div id="messages" class="messages"></div>
-        <div class="trace-wrap">
-          <h3>Command Trace</h3>
-          <div id="traceList" class="trace-list"></div>
-        </div>
-        <div class="row">
-          <input id="promptInput" placeholder="make it darker and slower" />
-          <select id="intentInput">
-            <option value="edit">edit</option>
-            <option value="new_scene">new_scene</option>
-            <option value="mix_fix">mix_fix</option>
-          </select>
-          <button id="sendBtn">Send</button>
+          <section class="panel">
+            <h2>Quick Moves</h2>
+            <div class="quick-actions">
+              <button class="secondary quickPromptBtn" data-prompt="make it darker and slower">Darker + Slower</button>
+              <button class="secondary quickPromptBtn" data-prompt="make it brighter and faster">Brighter + Faster</button>
+              <button class="secondary quickPromptBtn" data-prompt="new scene with fresh groove">New Scene</button>
+            </div>
+            <h3>Live Activity</h3>
+            <div id="activityLog" class="messages" role="log" aria-live="polite"></div>
+          </section>
         </div>
       </section>
 
-      <section class="panel mixer">
-        <h2>Mixer</h2>
-        <div class="grid">
-          <label>P1 Amp <input id="p1_amp" type="range" min="0" max="1" step="0.01" value="0.7" /></label>
-          <label>P1 LPF <input id="p1_lpf" type="range" min="200" max="8000" step="10" value="2500" /></label>
-          <label>P1 HPF <input id="p1_hpf" type="range" min="0" max="1200" step="5" value="0" /></label>
-          <label>P1 Pan <input id="p1_pan" type="range" min="-1" max="1" step="0.01" value="0" /></label>
+      <section id="view-create" class="view hidden">
+        <div class="layout">
+          <section class="panel chat">
+            <h2>DJ Chat</h2>
+            <div class="row">
+              <input id="promptInput" placeholder="make it darker and slower" />
+              <select id="intentInput">
+                <option value="edit">edit</option>
+                <option value="new_scene">new_scene</option>
+                <option value="mix_fix">mix_fix</option>
+              </select>
+              <button id="sendBtn">Send</button>
+            </div>
+            <div id="messages" class="messages" role="log" aria-live="polite"></div>
+            <div id="troubleshootCard" class="troubleshoot hidden">
+              <h3>Couldn’t apply that change</h3>
+              <p id="troubleshootSummary" class="subtitle">Try guided diagnose/fix.</p>
+              <p id="troubleshootBudget" class="subtitle">Troubleshoot credits: 3/3</p>
+              <div class="row">
+                <button id="troubleshootBtn">Diagnose &amp; Fix (1 credit)</button>
+                <button id="applyFixBtn" class="secondary hidden">Apply Fix</button>
+                <button id="dismissFixBtn" class="secondary">Dismiss</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel mixer">
+            <h2>Mixer</h2>
+            <div class="grid">
+              <label>P1 Amp <input id="p1_amp" type="range" min="0" max="1" step="0.01" value="0.7" /></label>
+              <label>P1 LPF <input id="p1_lpf" type="range" min="200" max="8000" step="10" value="2500" /></label>
+              <label>P1 HPF <input id="p1_hpf" type="range" min="0" max="1200" step="5" value="0" /></label>
+              <label>P1 Pan <input id="p1_pan" type="range" min="-1" max="1" step="0.01" value="0" /></label>
+            </div>
+            <button id="applyMixerBtn">Apply Mixer</button>
+          </section>
         </div>
-        <button id="applyMixerBtn">Apply Mixer</button>
       </section>
 
-      <section class="panel events">
-        <h2>Events</h2>
-        <pre id="eventsBox"></pre>
+      <section id="view-inspect" class="view hidden">
+        <div class="layout">
+          <section class="panel">
+            <h2>LLM Settings</h2>
+            <p class="settings-help">Quick mode: <code>auto</code> tries codex-cli, then OpenAI API. If both fail, requests return actionable feedback.</p>
+            <div class="row">
+              <label for="llmBackend">Backend</label>
+              <select id="llmBackend">
+                <option value="auto">auto</option>
+                <option value="openai-api">openai-api</option>
+                <option value="codex-cli">codex-cli</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="llmModel">Model</label>
+              <input id="llmModel" placeholder="gpt-5.2-codex" />
+            </div>
+            <div class="row" id="apiKeyRow">
+              <label for="llmApiKey">OpenAI Key</label>
+              <input id="llmApiKey" type="password" placeholder="sk-..." />
+            </div>
+            <details id="advancedSettings" class="advanced-settings">
+              <summary>Advanced (Codex CLI)</summary>
+              <div class="row">
+                <label for="codexCommand">Codex CLI Cmd</label>
+                <input id="codexCommand" placeholder="codex exec" />
+              </div>
+              <div class="row">
+                <label for="codexModel">Codex CLI Model</label>
+                <input id="codexModel" placeholder="gpt-5.2-codex" />
+              </div>
+            </details>
+            <div class="row">
+              <button id="refreshSettingsBtn" class="secondary">Refresh Settings</button>
+              <button id="saveSettingsBtn">Save Settings</button>
+            </div>
+            <p id="settingsStatus" class="subtitle">LLM settings: loading...</p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Command Trace</h2>
+              <div class="trace-actions">
+                <button id="copyLastTraceBtn" class="secondary">Copy Last</button>
+                <button id="copyAllTraceBtn" class="secondary">Copy All</button>
+                <button id="clearTraceBtn" class="secondary">Clear Trace</button>
+              </div>
+            </div>
+            <div id="traceList" class="trace-list"></div>
+          </section>
+
+          <section class="panel events">
+            <h2>Events</h2>
+            <pre id="eventsBox"></pre>
+          </section>
+        </div>
       </section>
     </main>
     <script src="/assets/app.js"></script>

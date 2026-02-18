@@ -1,31 +1,87 @@
 :root {
-  --bg: #0e1116;
-  --card: #151a22;
-  --muted: #8da0b7;
-  --text: #e8eef6;
-  --accent: #2dd4bf;
-  --accent2: #f59e0b;
-  --danger: #ef4444;
+  --bg: #0d1016;
+  --card: #141c28;
+  --muted: #9cb0c7;
+  --text: #edf4ff;
+  --accent: #3dddb4;
+  --accent-soft: #103447;
+  --danger: #f26262;
+  --border: #2a3547;
 }
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
   font-family: "Avenir Next", "Segoe UI", sans-serif;
-  background: radial-gradient(circle at top right, #122131 0%, var(--bg) 55%);
+  background:
+    radial-gradient(circle at 10% -5%, #183249 0%, transparent 38%),
+    radial-gradient(circle at 110% 10%, #2a1b3d 0%, transparent 32%),
+    var(--bg);
   color: var(--text);
 }
+
+.app-shell {
+  padding: 16px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.status-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-pill {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #101824;
+  padding: 6px 10px;
+  min-width: 120px;
+}
+.status-pill span {
+  color: var(--muted);
+  font-size: 11px;
+  display: block;
+}
+.status-pill strong {
+  font-size: 13px;
+}
+
+.mode-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.mode-btn {
+  background: #102032;
+  color: #dbeafe;
+  border: 1px solid #2f4a61;
+}
+.mode-btn.is-active {
+  background: linear-gradient(135deg, var(--accent), #39a8f6);
+  color: #031018;
+  border-color: transparent;
+}
+
+.view.hidden { display: none; }
 
 .layout {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
-  padding: 16px;
 }
 
 .panel {
-  background: linear-gradient(160deg, #1a2230, var(--card));
-  border: 1px solid #253043;
+  background: linear-gradient(160deg, #1a2535, var(--card));
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
 }
@@ -54,47 +110,40 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 
 input, select, button {
   border-radius: 8px;
-  border: 1px solid #2f3a4f;
+  border: 1px solid #31435d;
   background: #111823;
   color: var(--text);
   padding: 8px;
 }
 
 button {
-  background: linear-gradient(135deg, var(--accent), #0ea5e9);
+  background: linear-gradient(135deg, var(--accent), #2ea8ff);
   color: #06121b;
   font-weight: 700;
   cursor: pointer;
 }
 button.secondary {
-  background: #172232;
+  background: #142133;
   color: var(--text);
-  border-color: #2c3a4f;
+  border-color: #324761;
 }
 
-#stopBtn { background: linear-gradient(135deg, var(--danger), #f97316); color: #fff; }
-#undoBtn { background: linear-gradient(135deg, var(--accent2), #fb7185); color: #1a0f11; }
+#stopBtn { background: linear-gradient(135deg, var(--danger), #f28751); color: #fff; }
+#undoBtn { background: linear-gradient(135deg, #f6cc5a, #fb7185); color: #1a0f11; }
 
 .messages {
   min-height: 180px;
   max-height: 240px;
   overflow-y: auto;
-  border: 1px solid #2b374b;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
-  background: #0f1520;
+  background: #0c131d;
 }
 
 .msg { margin: 6px 0; padding: 6px 8px; border-radius: 6px; }
 .msg.user { background: #1d3441; }
 .msg.system { background: #2c1f38; }
-.settings-wrap {
-  border: 1px solid #2b374b;
-  border-radius: 8px;
-  background: #0f1520;
-  padding: 8px;
-  margin: 10px 0;
-}
 .settings-help {
   margin: 0 0 6px;
   color: var(--muted);
@@ -114,21 +163,14 @@ button.secondary {
 .hidden {
   display: none;
 }
-.trace-wrap {
-  margin: 8px 0;
-  border: 1px solid #2b374b;
-  border-radius: 8px;
-  background: #0f1520;
-  padding: 8px;
-}
 .trace-list {
   max-height: 260px;
   overflow-y: auto;
 }
 .trace-item {
-  border: 1px solid #2b374b;
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #101827;
+  background: #0f1726;
   margin-bottom: 8px;
 }
 .trace-item summary {
@@ -151,7 +193,7 @@ button.secondary {
   white-space: pre-wrap;
   word-break: break-word;
   background: #0b1018;
-  border: 1px solid #273447;
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
   color: #bfe0ff;
@@ -163,14 +205,37 @@ button.secondary {
   grid-template-columns: 1fr;
   gap: 8px;
 }
+.quick-actions {
+  display: grid;
+  gap: 8px;
+}
+.troubleshoot {
+  margin-top: 10px;
+  border: 1px solid #3a4a62;
+  border-radius: 8px;
+  background: #0d1624;
+  padding: 10px;
+}
+.troubleshoot h3 {
+  margin: 0 0 6px;
+}
 
 #eventsBox {
   height: 220px;
   overflow-y: auto;
   background: #0b1018;
-  border: 1px solid #2a3447;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px;
   color: #bfe0ff;
   margin: 0;
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-direction: column;
+  }
+  .row {
+    flex-wrap: wrap;
+  }
 }
