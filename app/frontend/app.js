@@ -7,6 +7,8 @@ const dom = {
   runtimeState: document.getElementById('runtimeState'),
   sessionState: document.getElementById('sessionState'),
   eventsState: document.getElementById('eventsState'),
+  playerBarStatus: document.getElementById('playerBarStatus'),
+  latestOutcome: document.getElementById('latestOutcome'),
   traceList: document.getElementById('traceList'),
   troubleshootCard: document.getElementById('troubleshootCard'),
   troubleshootSummary: document.getElementById('troubleshootSummary'),
@@ -47,6 +49,7 @@ function renderStatus() {
   if (dom.runtimeState) dom.runtimeState.textContent = uiState.runtime;
   if (dom.sessionState) dom.sessionState.textContent = uiState.sessionId ? uiState.sessionId.slice(0, 8) : 'n/a';
   if (dom.eventsState) dom.eventsState.textContent = uiState.sse;
+  if (dom.playerBarStatus) dom.playerBarStatus.textContent = uiState.runtime;
   if (dom.statusLine) {
     const suffix = uiState.sessionId ? ` (${uiState.sessionId})` : '';
     dom.statusLine.textContent = `Status: ${uiState.runtime}${suffix}`;
@@ -120,6 +123,7 @@ async function sendPrompt(promptOverride = '', intentOverride = '') {
   const data = await callChatTurn('chat', requestBody);
   const result = formatTurnResult(data);
   logMessage('system', `${result} (${data.latency_ms}ms)`);
+  setLatestOutcome(result);
   logNormalizationInfo(data);
   handleTurnFailureState(data, requestBody);
 
@@ -147,7 +151,9 @@ async function applyMixer() {
     prompt: JSON.stringify(commands),
     intent: 'mix_fix',
   });
-  logMessage('system', formatTurnResult(mixerTurn));
+  const result = formatTurnResult(mixerTurn);
+  logMessage('system', result);
+  setLatestOutcome(result);
   logNormalizationInfo(mixerTurn);
   hideTroubleshootCard();
   if (ampValue === 0) logMessage('system', 'P1 muted (amp=0)');
@@ -158,9 +164,15 @@ async function setBpm() {
   const bpm = Number(document.getElementById('bpmInput').value);
   const prompt = `Set bpm to ${bpm}`;
   const data = await callChatTurn('bpm', { session_id: uiState.sessionId, prompt, intent: 'edit' });
-  logMessage('system', formatTurnResult(data));
+  const result = formatTurnResult(data);
+  logMessage('system', result);
+  setLatestOutcome(result);
   logNormalizationInfo(data);
   handleTurnFailureState(data, { prompt, intent: 'edit' });
+}
+
+function setLatestOutcome(text) {
+  if (dom.latestOutcome) dom.latestOutcome.textContent = text;
 }
 
 function failureType(data) {
@@ -202,7 +214,7 @@ function renderTroubleshootCard(extraSummary = '') {
   const type = uiState.failedTurn.type;
   let summary = 'Could not apply that change.';
   if (type === 'backend') {
-    summary = 'Model backend unavailable. Open Inspect > LLM Settings, then retry.';
+    summary = 'Model backend unavailable. Open Details > Settings, then retry.';
   } else if (type === 'runtime') {
     summary = 'Runtime apply failed. Try Boot, then retry.';
   } else if (type === 'validation') {
@@ -234,6 +246,7 @@ function hideTroubleshootCard() {
 async function runTroubleshoot() {
   if (!uiState.failedTurn || !uiState.sessionId) return;
   if (uiState.failedTurn.type !== 'validation') return;
+
   const payload = await api('/api/chat/troubleshoot', {
     method: 'POST',
     body: JSON.stringify({
@@ -244,6 +257,7 @@ async function runTroubleshoot() {
       validation_errors: uiState.failedTurn.validationErrors,
     }),
   });
+
   uiState.troubleshootUsed = payload.budget?.used || uiState.troubleshootUsed + 1;
   uiState.troubleshootLimit = payload.budget?.limit || uiState.troubleshootLimit;
   uiState.repairedCommands = payload.fixed_commands || [];
@@ -256,6 +270,7 @@ async function runTroubleshoot() {
 
 async function applyRepairedCommands() {
   if (!uiState.repairedCommands || !uiState.repairedCommands.length || !uiState.sessionId || !uiState.failedTurn) return;
+
   const requestBody = {
     session_id: uiState.sessionId,
     prompt: JSON.stringify(uiState.repairedCommands),
@@ -264,6 +279,7 @@ async function applyRepairedCommands() {
   const data = await callChatTurn('repair-apply', requestBody);
   const result = formatTurnResult(data);
   logMessage('system', `${result} (${data.latency_ms}ms)`);
+  setLatestOutcome(result);
   logNormalizationInfo(data);
   handleTurnFailureState(data, requestBody);
 }
@@ -542,23 +558,49 @@ function switchView(viewName) {
   });
 }
 
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-panel').forEach((panel) => {
+    panel.classList.toggle('hidden', panel.id !== `tab-${tabName}`);
+  });
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.tab === tabName);
+  });
+}
+
 function initModeNav() {
   document.querySelectorAll('.mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   });
 }
 
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+}
+
 function initActions() {
-  document.getElementById('bootBtn').onclick = () => boot().catch((e) => {
+  const bootHandler = () => boot().catch((e) => {
     setRuntimeState('error');
     logMessage('system', e.message);
   });
-  document.getElementById('stopBtn').onclick = () => stop().catch((e) => logMessage('system', e.message));
+  const stopHandler = () => stop().catch((e) => logMessage('system', e.message));
+  const undoHandler = () => undoLast().catch((e) => logMessage('system', e.message));
+
+  document.getElementById('bootBtn').onclick = bootHandler;
+  document.getElementById('stopBtn').onclick = stopHandler;
+  document.getElementById('undoBtn').onclick = undoHandler;
+  const quickBoot = document.getElementById('bootQuickBtn');
+  if (quickBoot) quickBoot.onclick = bootHandler;
+  const quickStop = document.getElementById('stopQuickBtn');
+  if (quickStop) quickStop.onclick = stopHandler;
+  const quickUndo = document.getElementById('undoQuickBtn');
+  if (quickUndo) quickUndo.onclick = undoHandler;
+
   document.getElementById('loadBtn').onclick = () => loadSong().catch((e) => logMessage('system', e.message));
   document.getElementById('sendBtn').onclick = () => sendPrompt().catch((e) => logMessage('system', e.message));
   document.getElementById('applyMixerBtn').onclick = () => applyMixer().catch((e) => logMessage('system', e.message));
   document.getElementById('bpmBtn').onclick = () => setBpm().catch((e) => logMessage('system', e.message));
-  document.getElementById('undoBtn').onclick = () => undoLast().catch((e) => logMessage('system', e.message));
   document.getElementById('refreshSettingsBtn').onclick = () =>
     loadLLMSettings().catch((e) => logMessage('system', e.message));
   document.getElementById('saveSettingsBtn').onclick = () =>
@@ -600,6 +642,15 @@ function initActions() {
     };
   }
 
+  const clearFeedBtn = document.getElementById('clearFeedBtn');
+  if (clearFeedBtn) {
+    clearFeedBtn.onclick = () => {
+      if (dom.messages) dom.messages.textContent = '';
+      if (dom.activityLog) dom.activityLog.textContent = '';
+      setLatestOutcome('Feed cleared');
+    };
+  }
+
   if (dom.troubleshootBtn) {
     dom.troubleshootBtn.onclick = () => runTroubleshoot().catch((e) => {
       logMessage('system', `Troubleshoot failed: ${e.message}`);
@@ -616,6 +667,7 @@ function initActions() {
 
 renderStatus();
 initModeNav();
+initTabs();
 initActions();
 connectEvents();
 boot().catch((e) => {
