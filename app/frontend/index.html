@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI DJ MVP</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel transport">
+        <h1>AI DJ</h1>
+        <p class="subtitle">human -> ui -> llm -> renardo</p>
+        <div class="row">
+          <button id="bootBtn">Boot</button>
+          <button id="stopBtn">Stop</button>
+          <button id="undoBtn">Undo Last</button>
+        </div>
+        <div class="row">
+          <input id="songPath" value="songs/2026-02-17_boten_anna_handsup.py" />
+          <button id="loadBtn">Load Song</button>
+        </div>
+        <div class="row">
+          <label for="bpmInput">BPM</label>
+          <input id="bpmInput" type="number" min="50" max="220" value="120" />
+          <button id="bpmBtn">Set</button>
+        </div>
+        <p id="statusLine">Status: idle</p>
+      </section>
+
+      <section class="panel chat">
+        <h2>DJ Chat</h2>
+        <div id="messages" class="messages"></div>
+        <div class="row">
+          <input id="promptInput" placeholder="make it darker and slower" />
+          <select id="intentInput">
+            <option value="edit">edit</option>
+            <option value="new_scene">new_scene</option>
+            <option value="mix_fix">mix_fix</option>
+          </select>
+          <button id="sendBtn">Send</button>
+        </div>
+      </section>
+
+      <section class="panel mixer">
+        <h2>Mixer</h2>
+        <div class="grid">
+          <label>P1 Amp <input id="p1_amp" type="range" min="0" max="1" step="0.01" value="0.7" /></label>
+          <label>P1 LPF <input id="p1_lpf" type="range" min="200" max="8000" step="10" value="2500" /></label>
+          <label>P1 HPF <input id="p1_hpf" type="range" min="0" max="1200" step="5" value="0" /></label>
+          <label>P1 Pan <input id="p1_pan" type="range" min="-1" max="1" step="0.01" value="0" /></label>
+        </div>
+        <button id="applyMixerBtn">Apply Mixer</button>
+      </section>
+
+      <section class="panel events">
+        <h2>Events</h2>
+        <pre id="eventsBox"></pre>
+      </section>
+    </main>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

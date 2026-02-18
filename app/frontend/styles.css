@@ -1,0 +1,85 @@
+:root {
+  --bg: #0e1116;
+  --card: #151a22;
+  --muted: #8da0b7;
+  --text: #e8eef6;
+  --accent: #2dd4bf;
+  --accent2: #f59e0b;
+  --danger: #ef4444;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top right, #122131 0%, var(--bg) 55%);
+  color: var(--text);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.panel {
+  background: linear-gradient(160deg, #1a2230, var(--card));
+  border: 1px solid #253043;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+h1, h2 { margin: 0 0 8px; }
+.subtitle { color: var(--muted); margin-top: 0; }
+.row { display: flex; gap: 8px; margin: 8px 0; }
+.row input, .row select { flex: 1; }
+
+input, select, button {
+  border-radius: 8px;
+  border: 1px solid #2f3a4f;
+  background: #111823;
+  color: var(--text);
+  padding: 8px;
+}
+
+button {
+  background: linear-gradient(135deg, var(--accent), #0ea5e9);
+  color: #06121b;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#stopBtn { background: linear-gradient(135deg, var(--danger), #f97316); color: #fff; }
+#undoBtn { background: linear-gradient(135deg, var(--accent2), #fb7185); color: #1a0f11; }
+
+.messages {
+  min-height: 180px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #2b374b;
+  border-radius: 8px;
+  padding: 8px;
+  background: #0f1520;
+}
+
+.msg { margin: 6px 0; padding: 6px 8px; border-radius: 6px; }
+.msg.user { background: #1d3441; }
+.msg.system { background: #2c1f38; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+#eventsBox {
+  height: 220px;
+  overflow-y: auto;
+  background: #0b1018;
+  border: 1px solid #2a3447;
+  border-radius: 8px;
+  padding: 8px;
+  color: #bfe0ff;
+  margin: 0;
+}
