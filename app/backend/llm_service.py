@@ -9,8 +9,6 @@ import shlex
 import shutil
 from typing import Any
 
-from app.shared.contracts import PatchEnvelope
-
 
 SYSTEM_PROMPT = """You are an AI DJ assistant for Renardo live coding.
 Return ONLY JSON with this shape: {\"commands\": [PatchCommand, ...]}.
@@ -92,27 +90,33 @@ class LLMService:
             },
         }
 
-        backend = self._resolve_backend()
-        try:
-            if backend == "openai-api":
-                return await self._generate_openai(user_content)
-            if backend == "codex-cli":
-                return await self._generate_codex_cli(user_content)
-        except Exception:
-            if self.backend != "auto":
-                raise
+        if self.backend == "openai-api":
+            return await self._generate_openai(user_content)
+        if self.backend == "codex-cli":
+            return await self._generate_codex_cli(user_content)
+        if self.backend == "fallback-local":
             return self._fallback_patch(prompt, intent), "fallback-local"
+
+        for backend in self._resolve_backend_chain():
+            try:
+                if backend == "codex-cli":
+                    return await self._generate_codex_cli(user_content)
+                if backend == "openai-api":
+                    return await self._generate_openai(user_content)
+            except Exception:
+                continue
 
         return self._fallback_patch(prompt, intent), "fallback-local"
 
-    def _resolve_backend(self) -> str:
-        if self.backend in {"openai-api", "codex-cli"}:
-            return self.backend
-        if self.api_key:
-            return "openai-api"
+    def _resolve_backend_chain(self) -> list[str]:
+        chain: list[str] = []
         if self.codex_available:
-            return "codex-cli"
-        return "fallback-local"
+            chain.append("codex-cli")
+        if self.api_key:
+            chain.append("openai-api")
+        if not chain:
+            chain.append("fallback-local")
+        return chain
 
     async def _generate_openai(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         if not self.api_key:
@@ -127,19 +131,11 @@ class LLMService:
 
         response = await client.responses.create(
             model=self.model,
-            temperature=0.3,
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(user_content)},
             ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "patch_envelope",
-                    "schema": PatchEnvelope.model_json_schema(),
-                    "strict": True,
-                }
-            },
+            text={"format": {"type": "json_object"}},
         )
 
         commands = self._extract_commands(response.output_text)

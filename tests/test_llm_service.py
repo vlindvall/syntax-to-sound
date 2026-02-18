@@ -21,10 +21,7 @@ class _FakeResponsesAPI:
     async def create(self, **kwargs):  # type: ignore[no-untyped-def]
         if self._assert_schema:
             text_format = kwargs["text"]["format"]
-            assert text_format["type"] == "json_schema"
-            assert text_format["strict"] is True
-            assert text_format["name"] == "patch_envelope"
-            assert "schema" in text_format
+            assert text_format["type"] == "json_object"
         return _FakeResponse(self._output_text)
 
 
@@ -58,14 +55,19 @@ class LLMServiceTests(unittest.TestCase):
 
         sys.modules.pop("openai", None)
 
-    def test_resolve_backend_prefers_openai_key_in_auto_mode(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {"AI_DJ_LLM_BACKEND": "auto", "OPENAI_API_KEY": "test-key"},
-            clear=True,
-        ):
-            service = LLMService()
-            self.assertEqual(service._resolve_backend(), "openai-api")
+    def test_resolve_backend_chain_prefers_codex_before_openai(self) -> None:
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+            with patch.dict(
+                "os.environ",
+                {
+                    "AI_DJ_LLM_BACKEND": "auto",
+                    "OPENAI_API_KEY": "test-key",
+                    "CODEX_CLI_COMMAND": "codex exec",
+                },
+                clear=True,
+            ):
+                service = LLMService()
+                self.assertEqual(service._resolve_backend_chain(), ["codex-cli", "openai-api"])
 
     def test_resolve_backend_uses_codex_cli_when_available(self) -> None:
         with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
@@ -79,7 +81,33 @@ class LLMServiceTests(unittest.TestCase):
                 clear=True,
             ):
                 service = LLMService()
-                self.assertEqual(service._resolve_backend(), "codex-cli")
+                self.assertEqual(service._resolve_backend_chain(), ["codex-cli"])
+
+    def test_auto_falls_back_from_codex_to_openai(self) -> None:
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+            with patch.dict(
+                "os.environ",
+                {
+                    "AI_DJ_LLM_BACKEND": "auto",
+                    "OPENAI_API_KEY": "test-key",
+                    "CODEX_CLI_COMMAND": "codex exec",
+                },
+                clear=True,
+            ):
+                service = LLMService()
+                with patch.object(
+                    service,
+                    "_generate_codex_cli",
+                    AsyncMock(side_effect=RuntimeError("codex unavailable")),
+                ):
+                    with patch.object(
+                        service,
+                        "_generate_openai",
+                        AsyncMock(return_value=([{"op": "clock_clear"}], "gpt-5.2-codex")),
+                    ):
+                        commands, model = asyncio.run(service.generate_patch("stop", "edit"))
+                        self.assertEqual(commands, [{"op": "clock_clear"}])
+                        self.assertEqual(model, "gpt-5.2-codex")
 
     def test_uses_strict_json_schema_format(self) -> None:
         os.environ["OPENAI_API_KEY"] = "test-key"

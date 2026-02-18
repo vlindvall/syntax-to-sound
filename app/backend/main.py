@@ -269,12 +269,19 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
                 },
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"LLM failure: {exc}") from exc
+            commands = state.llm.generate_fallback_patch(
+                prompt=request.prompt,
+                intent=request.intent.value,
+            )
+            model_name = "fallback-local"
+            normalization_notes.append(f"LLM backend failed; used fallback-local: {exc}")
+            normalized = True
 
     effective_commands = commands
     if not direct_json:
-        effective_commands, normalization_notes = normalize_commands(commands)
-        normalized = bool(normalization_notes) or effective_commands != commands
+        effective_commands, normalize_notes = normalize_commands(commands)
+        normalization_notes.extend(normalize_notes)
+        normalized = normalized or bool(normalization_notes) or effective_commands != commands
 
     validation_status = "valid"
     apply_status = "pending"

@@ -290,6 +290,7 @@ async function loadLLMSettings() {
   document.getElementById('codexCommand').value = payload.codex_command || '';
   document.getElementById('codexModel').value = payload.codex_model || '';
   document.getElementById('llmApiKey').value = '';
+  updateSettingsDisclosure(payload.backend || 'auto');
   const keyInfo = payload.has_api_key ? `saved ${payload.api_key_hint || ''}` : 'not set';
   setSettingsStatus(`LLM settings loaded: backend=${payload.backend}, model=${payload.model}, key=${keyInfo}`);
 }
@@ -311,6 +312,7 @@ async function saveLLMSettings() {
     body: JSON.stringify(request),
   });
   document.getElementById('llmApiKey').value = '';
+  updateSettingsDisclosure(payload.backend || 'auto');
   const keyInfo = payload.has_api_key ? `saved ${payload.api_key_hint || ''}` : 'not set';
   setSettingsStatus(`LLM settings saved: backend=${payload.backend}, model=${payload.model}, key=${keyInfo}`);
   logMessage('system', `LLM settings updated (${payload.backend})`);
@@ -318,6 +320,33 @@ async function saveLLMSettings() {
 
 function setSettingsStatus(text) {
   if (settingsStatus) settingsStatus.textContent = text;
+}
+
+function updateSettingsDisclosure(backend) {
+  const apiKeyRow = document.getElementById('apiKeyRow');
+  const advanced = document.getElementById('advancedSettings');
+  if (!apiKeyRow || !advanced) return;
+
+  if (backend === 'fallback-local') {
+    apiKeyRow.classList.add('hidden');
+    advanced.classList.add('hidden');
+    return;
+  }
+  if (backend === 'openai-api') {
+    apiKeyRow.classList.remove('hidden');
+    advanced.classList.add('hidden');
+    return;
+  }
+  if (backend === 'codex-cli') {
+    apiKeyRow.classList.add('hidden');
+    advanced.classList.remove('hidden');
+    advanced.open = true;
+    return;
+  }
+  // auto: show key and keep codex controls optional via collapsed advanced details
+  apiKeyRow.classList.remove('hidden');
+  advanced.classList.remove('hidden');
+  advanced.open = false;
 }
 
 function appendTraceStage(parent, title, payload) {
@@ -384,6 +413,8 @@ document.getElementById('refreshSettingsBtn').onclick = () =>
   loadLLMSettings().catch((e) => logMessage('system', e.message));
 document.getElementById('saveSettingsBtn').onclick = () =>
   saveLLMSettings().catch((e) => logMessage('system', e.message));
+document.getElementById('llmBackend').onchange = (e) =>
+  updateSettingsDisclosure(e.target.value);
 const clearTraceBtn = document.getElementById('clearTraceBtn');
 if (clearTraceBtn) {
   clearTraceBtn.onclick = () => {

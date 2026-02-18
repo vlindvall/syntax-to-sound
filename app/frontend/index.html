@@ -27,6 +27,7 @@
         </div>
         <div class="settings-wrap">
           <h3>LLM Settings</h3>
+          <p class="settings-help">Quick mode: use <code>auto</code> (tries codex-cli, then OpenAI API, then local fallback).</p>
           <div class="row">
             <label for="llmBackend">Backend</label>
             <select id="llmBackend">
@@ -40,18 +41,21 @@
             <label for="llmModel">Model</label>
             <input id="llmModel" placeholder="gpt-5.2-codex" />
           </div>
-          <div class="row">
+          <div class="row" id="apiKeyRow">
             <label for="llmApiKey">OpenAI Key</label>
             <input id="llmApiKey" type="password" placeholder="sk-..." />
           </div>
-          <div class="row">
-            <label for="codexCommand">Codex CLI Cmd</label>
-            <input id="codexCommand" placeholder="codex exec" />
-          </div>
-          <div class="row">
-            <label for="codexModel">Codex CLI Model</label>
-            <input id="codexModel" placeholder="gpt-5.2-codex" />
-          </div>
+          <details id="advancedSettings" class="advanced-settings">
+            <summary>Advanced (Codex CLI)</summary>
+            <div class="row">
+              <label for="codexCommand">Codex CLI Cmd</label>
+              <input id="codexCommand" placeholder="codex exec" />
+            </div>
+            <div class="row">
+              <label for="codexModel">Codex CLI Model</label>
+              <input id="codexModel" placeholder="gpt-5.2-codex" />
+            </div>
+          </details>
           <div class="row">
             <button id="refreshSettingsBtn" class="secondary">Refresh Settings</button>
             <button id="saveSettingsBtn">Save Settings</button>

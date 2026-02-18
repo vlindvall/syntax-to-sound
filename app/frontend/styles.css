@@ -95,6 +95,25 @@ button.secondary {
   padding: 8px;
   margin: 10px 0;
 }
+.settings-help {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.advanced-settings {
+  border: 1px dashed #30405a;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: 8px 0;
+}
+.advanced-settings summary {
+  cursor: pointer;
+  color: #c9defa;
+  font-size: 12px;
+}
+.hidden {
+  display: none;
+}
 .trace-wrap {
   margin: 8px 0;
   border: 1px solid #2b374b;
