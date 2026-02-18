@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI DJ Sequence Editor</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <h1>AI DJ</h1>
+          <p class="subtitle">sequence editor</p>
+        </div>
+        <nav class="top-nav">
+          <a class="mode-link" href="/">Home</a>
+          <a class="mode-link is-active" href="/sequencer" aria-current="page">Sequencer</a>
+        </nav>
+        <div class="status-cluster">
+          <div class="status-pill"><span>Runtime</span><strong id="sequencerRuntimePill">idle</strong></div>
+          <div class="status-pill"><span>Session</span><strong id="sequencerSessionPill">n/a</strong></div>
+          <div class="status-pill"><span>Players</span><strong id="sequencerPlayersPill">0</strong></div>
+        </div>
+      </header>
+
+      <section class="view is-active">
+        <div class="stack sequencer-stack">
+          <section class="panel sequencer-toolbar-panel">
+            <div class="panel-head">
+              <h2>Sequence Editor</h2>
+              <p id="sequencerStatus" class="subtitle">Waiting for runtime state...</p>
+            </div>
+            <div class="row sequencer-toolbar">
+              <button id="bootBtn">Boot Runtime</button>
+              <button id="refreshBtn" class="secondary">Refresh</button>
+              <input id="songPath" value="songs/2026-02-17_boten_anna_handsup.py" />
+              <button id="loadBtn">Load Song</button>
+            </div>
+          </section>
+
+          <section class="panel sequencer-create">
+            <div class="panel-head">
+              <h2>Add Sequence</h2>
+            </div>
+            <div class="sequencer-create-grid">
+              <label>
+                Type
+                <select id="addType">
+                  <option value="p">Melody (p)</option>
+                  <option value="b">Bass (b)</option>
+                  <option value="d">Drums (d)</option>
+                  <option value="h">Hi-Hat (h)</option>
+                  <option value="n">Noise/FX (n)</option>
+                </select>
+              </label>
+              <label>
+                Player
+                <input id="addPlayerPreview" readonly />
+              </label>
+              <label>
+                Synth
+                <input id="addSynth" value="pluck" placeholder="synth" />
+              </label>
+              <label>
+                Pattern
+                <input id="addPattern" placeholder="pattern" />
+              </label>
+              <label>
+                Dur
+                <input id="addDur" type="number" min="0.03125" step="0.03125" value="0.25" />
+              </label>
+              <label>
+                Amp
+                <input id="addAmp" type="number" min="0" max="1.5" step="0.01" value="0.8" />
+              </label>
+              <button id="addSequenceBtn">Add Sequence</button>
+            </div>
+          </section>
+
+          <section class="panel sequencer-list-panel">
+            <div class="panel-head">
+              <h2>Sequences</h2>
+              <p id="sequencerClock" class="subtitle">Clock stopped</p>
+            </div>
+            <div id="sequencerRows" class="sequencer-rows sequencer-rows-wide"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/sequencer.js"></script>
+  </body>
+</html>

@@ -18,7 +18,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_rejects_unsafe_player(self) -> None:
         _, _, errors = validate_and_emit(
-            [{"op": "player_set", "player": "x1", "param": "amp", "value": 0.2}]
+            [{"op": "player_set", "player": "_1", "param": "amp", "value": 0.2}]
         )
         self.assertTrue(errors)
 
@@ -47,6 +47,28 @@ class SafetyTests(unittest.TestCase):
         _, emitted, errors = validate_and_emit(commands)
         self.assertEqual(errors, [])
         self.assertIn("b1.detune = 0.2", emitted)
+
+    def test_accepts_dynamic_player_index(self) -> None:
+        commands = [
+            {"op": "player_set", "player": "p17", "param": "amp", "value": 0.4},
+        ]
+        _, emitted, errors = validate_and_emit(commands)
+        self.assertEqual(errors, [])
+        self.assertIn("p17.amp = 0.4", emitted)
+
+    def test_accepts_dynamic_player_prefix(self) -> None:
+        commands = [
+            {"op": "player_set", "player": "h3", "param": "amp", "value": 0.3},
+        ]
+        _, emitted, errors = validate_and_emit(commands)
+        self.assertEqual(errors, [])
+        self.assertIn("h3.amp = 0.3", emitted)
+
+    def test_rejects_zero_player_index(self) -> None:
+        _, _, errors = validate_and_emit(
+            [{"op": "player_set", "player": "p0", "param": "amp", "value": 0.2}]
+        )
+        self.assertTrue(errors)
 
     def test_accepts_negative_literal_assignments(self) -> None:
         validate_emitted_python("p1.pan = -0.5")
