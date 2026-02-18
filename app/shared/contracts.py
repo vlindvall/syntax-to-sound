@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Annotated, Literal, Union
 
@@ -42,12 +43,11 @@ class PlayerParam(str, Enum):
     SPIN = "spin"
 
 
-ALLOWED_PLAYERS = [
-    *(f"p{i}" for i in range(1, 9)),
-    *(f"b{i}" for i in range(1, 5)),
-    *(f"d{i}" for i in range(1, 5)),
-    *(f"n{i}" for i in range(1, 5)),
-]
+PLAYER_NAME_PATTERN = re.compile(r"^[a-z][1-9][0-9]*$")
+
+
+def is_allowed_player_name(player: str) -> bool:
+    return bool(PLAYER_NAME_PATTERN.fullmatch(player))
 
 
 class SetGlobalCommand(BaseModel):
@@ -66,7 +66,7 @@ class PlayerAssignCommand(BaseModel):
     @field_validator("player")
     @classmethod
     def validate_player(cls, v: str) -> str:
-        if v not in ALLOWED_PLAYERS:
+        if not is_allowed_player_name(v):
             raise ValueError(f"player {v} is not allowed")
         return v
 
@@ -80,7 +80,7 @@ class PlayerSetCommand(BaseModel):
     @field_validator("player")
     @classmethod
     def validate_player(cls, v: str) -> str:
-        if v not in ALLOWED_PLAYERS:
+        if not is_allowed_player_name(v):
             raise ValueError(f"player {v} is not allowed")
         return v
 
@@ -92,7 +92,7 @@ class PlayerStopCommand(BaseModel):
     @field_validator("player")
     @classmethod
     def validate_player(cls, v: str) -> str:
-        if v not in ALLOWED_PLAYERS:
+        if not is_allowed_player_name(v):
             raise ValueError(f"player {v} is not allowed")
         return v
 

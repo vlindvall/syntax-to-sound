@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import json
@@ -28,6 +29,7 @@ from app.shared.contracts import (
     PatchApplyRequest,
     PatchUndoRequest,
     RuntimeLoadSongRequest,
+    is_allowed_player_name,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +43,8 @@ LLM_SETTINGS_PATH = DATA_DIR / "llm_settings.json"
 class SessionState:
     globals: dict[str, Any] = field(default_factory=dict)
     players: dict[str, dict[str, Any]] = field(default_factory=dict)
+    song_path: str | None = None
+    clock_started_at: float | None = None
 
 
 class AppState:
@@ -134,8 +138,97 @@ async def index() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
 
 
+@app.get("/sequencer")
+async def sequencer_page() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "sequencer.html")
+
+
 app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR)), name="assets")
 TROUBLESHOOT_LIMIT_PER_SESSION = 3
+
+
+def _extract_literal_or_source(song_source: str, node: ast.AST) -> Any:
+    try:
+        parsed = ast.literal_eval(node)
+        if isinstance(parsed, (bool, int, float, str)):
+            return parsed
+    except Exception:
+        pass
+    source = ast.get_source_segment(song_source, node)
+    return source.strip() if source else ""
+
+
+def _extract_call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return "play"
+
+
+def _extract_song_session_state(song_path: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    song_source = song_path.read_text(encoding="utf-8")
+    tree = ast.parse(song_source)
+    globals_state: dict[str, Any] = {}
+    players_state: dict[str, dict[str, Any]] = {}
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                full_target = f"{target.value.id}.{target.attr}"
+                if full_target in {"Clock.bpm", "Scale.default", "Root.default"}:
+                    globals_state[full_target] = _extract_literal_or_source(song_source, node.value)
+            continue
+
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.BinOp):
+            continue
+        if not isinstance(node.value.op, ast.RShift):
+            continue
+        if not isinstance(node.value.left, ast.Name):
+            continue
+        player = node.value.left.id
+        if not is_allowed_player_name(player):
+            continue
+        if not isinstance(node.value.right, ast.Call):
+            continue
+
+        call = node.value.right
+        synth = _extract_call_name(call.func)
+        pattern = ""
+        if call.args:
+            pattern = ast.get_source_segment(song_source, call.args[0]) or ""
+        kwargs: dict[str, Any] = {}
+        for kwarg in call.keywords:
+            if kwarg.arg is None:
+                continue
+            kwargs[kwarg.arg] = _extract_literal_or_source(song_source, kwarg.value)
+
+        player_state: dict[str, Any] = {
+            "synth": synth,
+            "pattern": pattern.strip(),
+            "kwargs": kwargs,
+            "last_assign_at": time.time(),
+        }
+        for k, v in kwargs.items():
+            player_state[k] = v
+        players_state[player] = player_state
+
+    return globals_state, players_state
+
+
+def _runtime_state_payload() -> dict[str, Any]:
+    return {
+        "session_id": state.current_session_id,
+        "is_running": state.runtime.is_running(),
+        "song_path": state.session_state.song_path,
+        "clock_started_at": state.session_state.clock_started_at,
+        "server_ts": time.time(),
+        "globals": state.session_state.globals,
+        "players": state.session_state.players,
+    }
 
 
 def _compute_revert(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -162,18 +255,62 @@ def _compute_revert(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "value": previous,
                     }
                 )
+            player_kwargs = player_state.setdefault("kwargs", {})
+            if isinstance(player_kwargs, dict):
+                player_kwargs[param] = cmd["value"]
             player_state[param] = cmd["value"]
         elif op == "player_assign":
-            revert.append({"op": "player_stop", "player": cmd["player"]})
-            player_state = state.session_state.players.setdefault(cmd["player"], {})
-            player_state["synth"] = cmd["synth"]
-            player_state["pattern"] = cmd["pattern"]
-            for k, v in cmd.get("kwargs", {}).items():
+            player = cmd["player"]
+            previous_state = state.session_state.players.get(player, {})
+            previous_synth = previous_state.get("synth")
+            previous_pattern = previous_state.get("pattern")
+            previous_kwargs = previous_state.get("kwargs")
+            if previous_synth and previous_pattern:
+                revert.append(
+                    {
+                        "op": "player_assign",
+                        "player": player,
+                        "synth": previous_synth,
+                        "pattern": previous_pattern,
+                        "kwargs": previous_kwargs if isinstance(previous_kwargs, dict) else {},
+                    }
+                )
+            else:
+                revert.append({"op": "player_stop", "player": player})
+
+            player_kwargs = cmd.get("kwargs", {})
+            player_state = {
+                "synth": cmd["synth"],
+                "pattern": cmd["pattern"],
+                "kwargs": player_kwargs if isinstance(player_kwargs, dict) else {},
+                "last_assign_at": time.time(),
+            }
+            for k, v in player_state["kwargs"].items():
                 player_state[k] = v
+            state.session_state.players[player] = player_state
+            if state.session_state.clock_started_at is None:
+                state.session_state.clock_started_at = time.time()
         elif op == "clock_clear":
             # Clear isn't generally reversible; no automatic revert command.
+            state.session_state.clock_started_at = None
             continue
         elif op == "player_stop":
+            player = cmd["player"]
+            previous_state = state.session_state.players.get(player, {})
+            previous_synth = previous_state.get("synth")
+            previous_pattern = previous_state.get("pattern")
+            previous_kwargs = previous_state.get("kwargs")
+            if previous_synth and previous_pattern:
+                revert.append(
+                    {
+                        "op": "player_assign",
+                        "player": player,
+                        "synth": previous_synth,
+                        "pattern": previous_pattern,
+                        "kwargs": previous_kwargs if isinstance(previous_kwargs, dict) else {},
+                    }
+                )
+            state.session_state.players.pop(player, None)
             continue
     return revert
 
@@ -201,11 +338,30 @@ async def runtime_boot() -> BootResponse:
 
 @app.post("/api/runtime/load-song")
 async def runtime_load_song(request: RuntimeLoadSongRequest) -> dict[str, Any]:
+    song_path = Path(request.path)
+    if not song_path.is_absolute():
+        song_path = ROOT / song_path
+
     try:
         await state.runtime.ensure_running()
         await state.runtime.load_song(request.path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        globals_state, players_state = _extract_song_session_state(song_path)
+        state.session_state.globals = globals_state
+        state.session_state.players = players_state
+    except Exception as exc:
+        state.publish_event(
+            "runtime",
+            "warning",
+            "Loaded song but failed to parse sequence state",
+            {"song_path": str(song_path), "error": str(exc)},
+        )
+        state.session_state.players = {}
+    state.session_state.song_path = request.path
+    state.session_state.clock_started_at = time.time()
 
     state.store.update_session_song(state.current_session_id, request.path)
     state.store.record_snapshot(state.current_session_id, request.path, notes="manual load")
@@ -216,6 +372,7 @@ async def runtime_load_song(request: RuntimeLoadSongRequest) -> dict[str, Any]:
 async def runtime_stop() -> dict[str, Any]:
     await state.runtime.ensure_running()
     await state.runtime.clear_clock()
+    state.session_state.clock_started_at = None
     return {"ok": True}
 
 
@@ -442,9 +599,16 @@ async def session_detail(session_id: str) -> dict[str, Any]:
         "state": {
             "globals": state.session_state.globals,
             "players": state.session_state.players,
+            "song_path": state.session_state.song_path,
+            "clock_started_at": state.session_state.clock_started_at,
         },
     }
     return payload
+
+
+@app.get("/api/runtime/state")
+async def runtime_state() -> dict[str, Any]:
+    return _runtime_state_payload()
 
 
 @app.get("/api/events/stream")
