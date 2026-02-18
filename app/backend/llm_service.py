@@ -20,6 +20,14 @@ For player_set, valid params include: amp, dur, sus, oct, lpf, hpf, pan, room, m
 Keep commands short, musical, and safe. Max 12 commands.
 """
 
+REPAIR_SYSTEM_PROMPT = """You repair invalid Renardo patch commands for an AI DJ system.
+Return ONLY JSON: {\"commands\": [PatchCommand, ...], \"reason\": \"...\", \"confidence\": 0.0}.
+Do not explain anything outside JSON.
+Preserve the user's musical intent.
+Repair only what is needed to pass validation and safety checks.
+Prefer the smallest safe command list. Max 6 commands.
+"""
+
 
 class LLMService:
     def __init__(self) -> None:
@@ -154,6 +162,58 @@ class LLMService:
             raise RuntimeError("all LLM backends failed: " + "; ".join(failures))
         raise RuntimeError("no LLM backend is configured or available")
 
+    async def generate_repair_commands(
+        self,
+        *,
+        prompt: str,
+        intent: str,
+        state: dict[str, Any],
+        failed_commands: list[dict[str, Any]],
+        validation_errors: list[str],
+    ) -> tuple[list[dict[str, Any]], str, str, float]:
+        user_content = {
+            "intent": intent,
+            "prompt": prompt,
+            "state": state,
+            "failed_commands": failed_commands[:12],
+            "validation_errors": validation_errors[:8],
+            "goal": "Return corrected commands that validate and are safe to apply.",
+        }
+
+        failures: list[str] = []
+        for backend in self._resolve_backend_chain():
+            try:
+                if backend == "codex-cli":
+                    payload, model = await self._generate_codex_payload(
+                        user_content=user_content,
+                        system_prompt=REPAIR_SYSTEM_PROMPT,
+                    )
+                elif backend == "openai-api":
+                    payload, model = await self._generate_openai_payload(
+                        user_content=user_content,
+                        system_prompt=REPAIR_SYSTEM_PROMPT,
+                        max_output_tokens=220,
+                    )
+                else:
+                    continue
+
+                commands = self._extract_commands_from_payload(payload)
+                reason = str(payload.get("reason", "")).strip() if isinstance(payload, dict) else ""
+                confidence_raw = payload.get("confidence", 0.0) if isinstance(payload, dict) else 0.0
+                try:
+                    confidence = float(confidence_raw)
+                except Exception:
+                    confidence = 0.0
+                confidence = min(1.0, max(0.0, confidence))
+                return commands, model, reason, confidence
+            except Exception as exc:
+                failures.append(f"{backend}: {exc}")
+                continue
+
+        if failures:
+            raise RuntimeError("repair failed across backends: " + "; ".join(failures))
+        raise RuntimeError("no LLM backend is configured or available for repair")
+
     def _resolve_backend_chain(self) -> list[str]:
         self._refresh_codex_availability()
         chain: list[str] = []
@@ -164,6 +224,21 @@ class LLMService:
         return chain
 
     async def _generate_openai(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+        payload, model = await self._generate_openai_payload(
+            user_content=user_content,
+            system_prompt=SYSTEM_PROMPT,
+            max_output_tokens=360,
+        )
+        commands = self._extract_commands_from_payload(payload)
+        return commands, model
+
+    async def _generate_openai_payload(
+        self,
+        *,
+        user_content: dict[str, Any],
+        system_prompt: str,
+        max_output_tokens: int,
+    ) -> tuple[Any, str]:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for openai-api backend")
 
@@ -177,18 +252,29 @@ class LLMService:
         response = await client.responses.create(
             model=self.model,
             input=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_content)},
             ],
             text={"format": {"type": "json_object"}},
+            max_output_tokens=max_output_tokens,
         )
-
-        commands = self._extract_commands(response.output_text)
-        if not commands:
-            raise ValueError("model returned invalid commands payload")
-        return commands, self.model
+        payload = self._extract_json_payload(response.output_text)
+        return payload, self.model
 
     async def _generate_codex_cli(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+        payload, model = await self._generate_codex_payload(
+            user_content=user_content,
+            system_prompt=SYSTEM_PROMPT,
+        )
+        commands = self._extract_commands_from_payload(payload)
+        return commands, model
+
+    async def _generate_codex_payload(
+        self,
+        *,
+        user_content: dict[str, Any],
+        system_prompt: str,
+    ) -> tuple[Any, str]:
         if not self.codex_command:
             raise ValueError("CODEX_CLI_COMMAND is empty")
         self._refresh_codex_availability()
@@ -196,7 +282,7 @@ class LLMService:
             raise RuntimeError(f"codex CLI binary not found: {self.codex_command[0]}")
 
         prompt = (
-            f"{SYSTEM_PROMPT}\n\n"
+            f"{system_prompt}\n\n"
             "Return ONLY JSON.\n\n"
             f"{json.dumps(user_content)}"
         )
@@ -243,28 +329,34 @@ class LLMService:
 
         if not output:
             output = stdout.decode(errors="replace").strip()
-        commands = self._extract_commands(output)
-        if not commands:
-            raise ValueError("codex CLI returned invalid commands payload")
-        return commands, f"codex-cli:{self.codex_model}"
+        payload = self._extract_json_payload(output)
+        return payload, f"codex-cli:{self.codex_model}"
+
+    def _extract_commands_from_payload(self, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            commands = payload
+        elif isinstance(payload, dict):
+            commands = payload.get("commands", [])
+        else:
+            raise ValueError("model returned a non-JSON payload")
+
+        if not isinstance(commands, list):
+            raise ValueError("model returned invalid commands payload")
+        normalized = self._normalize_commands(commands)
+        if not normalized:
+            raise ValueError("model returned empty commands payload")
+        return normalized
 
     def _extract_commands(self, text: str) -> list[dict[str, Any]]:
-        for payload in self._extract_json_payloads(text):
-            if isinstance(payload, list):
-                commands = payload
-            elif isinstance(payload, dict):
-                commands = payload.get("commands")
-            else:
-                continue
+        payload = self._extract_json_payload(text)
+        return self._extract_commands_from_payload(payload)
 
-            if not isinstance(commands, list):
-                continue
-
-            normalized = self._normalize_commands(commands)
-            if normalized:
-                return normalized
-
-        raise ValueError("model returned invalid commands payload")
+    def _extract_json_payload(self, text: str) -> Any:
+        payloads = self._extract_json_payloads(text)
+        for payload in payloads:
+            if isinstance(payload, (list, dict)):
+                return payload
+        raise ValueError("model returned invalid JSON payload")
 
     def _extract_json_payloads(self, text: str) -> list[Any]:
         stripped = text.strip()
