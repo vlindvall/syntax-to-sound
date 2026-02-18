@@ -1,12 +1,18 @@
 PYTHON ?= python3
 
-.PHONY: venv install renardo renardo-boot renardo-prepare play live new-song
+.PHONY: venv install app test-app renardo renardo-boot renardo-prepare play live new-song
 
 venv:
 	$(PYTHON) -m venv .venv
 
 install:
-	. .venv/bin/activate && pip install -U pip && pip install renardo
+	. .venv/bin/activate && pip install -U pip && pip install -r requirements.txt && pip install renardo
+
+app:
+	. .venv/bin/activate && uvicorn app.backend.main:app --reload --host 127.0.0.1 --port 8000
+
+test-app:
+	. .venv/bin/activate && python -m unittest discover -s tests -p 'test_*.py'
 
 renardo:
 	. .venv/bin/activate && renardo

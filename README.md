@@ -8,9 +8,10 @@ A playground for composing and experimenting with generative music ideas in code
 
 ## Stack
 
-- Python 3.11+
+- Python 3.10+
 - Renardo
 - SuperCollider (audio engine used by Renardo)
+- FastAPI + vanilla web UI (AI DJ MVP)
 
 ## Quick start
 
@@ -19,7 +20,43 @@ make venv
 make install
 ```
 
-## Start Renardo
+## AI DJ Web App (MVP)
+
+Run local app:
+
+```bash
+make app
+```
+
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+Optional for cloud LLM responses:
+
+```bash
+export OPENAI_API_KEY="your_key_here"
+export OPENAI_MODEL="gpt-4.1-mini"
+```
+
+Without `OPENAI_API_KEY`, the app uses a local fallback patch generator so chat controls still work.
+
+### API surface
+
+- `POST /api/runtime/boot`
+- `POST /api/runtime/load-song`
+- `POST /api/runtime/stop`
+- `POST /api/chat/turn`
+- `POST /api/patch/apply`
+- `POST /api/patch/undo`
+- `GET /api/events/stream`
+- `GET /api/session/{session_id}`
+
+### Local persistence
+
+App state persists in:
+
+- `.appdata/ai_dj.sqlite3`
+
+## Start Renardo directly (existing flow)
 
 ```bash
 make renardo
@@ -72,4 +109,8 @@ This generates a file in `songs/` from `songs/_template.py` with a date-prefixed
 
 `songs/2026-02-17_neon_rain.py`
 
-Then open that file and start composing by adding player lines (`p1`, `p2`, etc.).
+## Tests
+
+```bash
+make test-app
+```
