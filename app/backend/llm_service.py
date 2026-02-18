@@ -7,6 +7,8 @@ import os
 import re
 import shlex
 import shutil
+import tempfile
+from pathlib import Path
 from typing import Any
 
 
@@ -24,11 +26,17 @@ class LLMService:
         self.backend = os.getenv("AI_DJ_LLM_BACKEND", "auto").strip().lower()
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.model = os.getenv("OPENAI_MODEL", "gpt-5.2-codex")
+        timeout = os.getenv("CODEX_TIMEOUT_SECONDS", "45").strip()
+        try:
+            self.codex_timeout_seconds = max(1.0, float(timeout))
+        except ValueError:
+            self.codex_timeout_seconds = 45.0
 
         codex_command = os.getenv("CODEX_CLI_COMMAND", "codex exec")
         self.codex_command = shlex.split(codex_command) if codex_command.strip() else []
         self.codex_model = os.getenv("CODEX_MODEL", self.model)
-        self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
+        self.codex_available = False
+        self._refresh_codex_availability()
 
     def apply_settings(
         self,
@@ -52,7 +60,41 @@ class LLMService:
 
         if not self.codex_model:
             self.codex_model = self.model
-        self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
+        self._refresh_codex_availability()
+
+    def _refresh_codex_availability(self) -> None:
+        self.codex_available = False
+        if not self.codex_command:
+            return
+
+        resolved = self._resolve_executable(self.codex_command[0])
+        if not resolved:
+            return
+
+        self.codex_command = [resolved, *self.codex_command[1:]]
+        self.codex_available = True
+
+    def _resolve_executable(self, executable: str) -> str | None:
+        if not executable:
+            return None
+        if os.path.isabs(executable):
+            return executable if os.access(executable, os.X_OK) else None
+
+        resolved = shutil.which(executable)
+        if resolved:
+            return resolved
+
+        home = str(Path.home())
+        extra_paths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            f"{home}/.local/bin",
+        ]
+        path_entries = [os.environ.get("PATH", ""), *extra_paths]
+        search_path = os.pathsep.join(entry for entry in path_entries if entry)
+        return shutil.which(executable, path=search_path)
 
     def settings_payload(self) -> dict[str, Any]:
         api_key_hint = None
@@ -95,27 +137,30 @@ class LLMService:
         if self.backend == "codex-cli":
             return await self._generate_codex_cli(user_content)
         if self.backend == "fallback-local":
-            return self._fallback_patch(prompt, intent), "fallback-local"
+            raise RuntimeError("fallback-local backend is disabled")
 
+        failures: list[str] = []
         for backend in self._resolve_backend_chain():
             try:
                 if backend == "codex-cli":
                     return await self._generate_codex_cli(user_content)
                 if backend == "openai-api":
                     return await self._generate_openai(user_content)
-            except Exception:
+            except Exception as exc:
+                failures.append(f"{backend}: {exc}")
                 continue
 
-        return self._fallback_patch(prompt, intent), "fallback-local"
+        if failures:
+            raise RuntimeError("all LLM backends failed: " + "; ".join(failures))
+        raise RuntimeError("no LLM backend is configured or available")
 
     def _resolve_backend_chain(self) -> list[str]:
+        self._refresh_codex_availability()
         chain: list[str] = []
         if self.codex_available:
             chain.append("codex-cli")
         if self.api_key:
             chain.append("openai-api")
-        if not chain:
-            chain.append("fallback-local")
         return chain
 
     async def _generate_openai(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -146,6 +191,7 @@ class LLMService:
     async def _generate_codex_cli(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         if not self.codex_command:
             raise ValueError("CODEX_CLI_COMMAND is empty")
+        self._refresh_codex_availability()
         if not self.codex_available:
             raise RuntimeError(f"codex CLI binary not found: {self.codex_command[0]}")
 
@@ -154,46 +200,98 @@ class LLMService:
             "Return ONLY JSON.\n\n"
             f"{json.dumps(user_content)}"
         )
-        process = await asyncio.create_subprocess_exec(
-            *self.codex_command,
-            "--model",
-            self.codex_model,
-            prompt,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"codex CLI failed with exit code {process.returncode}: {stderr.decode().strip()}"
+        fd, output_path = tempfile.mkstemp(prefix="codex-last-", suffix=".txt")
+        os.close(fd)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self.codex_command,
+                "--model",
+                self.codex_model,
+                "--output-last-message",
+                output_path,
+                prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.codex_timeout_seconds
+                )
+            except asyncio.TimeoutError as exc:
+                process.kill()
+                await process.communicate()
+                raise RuntimeError(
+                    f"codex CLI timed out after {self.codex_timeout_seconds:.1f}s"
+                ) from exc
 
-        output = stdout.decode().strip()
+            if process.returncode != 0:
+                raise RuntimeError(
+                    f"codex CLI failed with exit code {process.returncode}: {stderr.decode(errors='replace').strip()}"
+                )
+
+            output = ""
+            try:
+                with open(output_path, "r", encoding="utf-8", errors="replace") as handle:
+                    output = handle.read().strip()
+            except Exception:
+                output = ""
+        finally:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+
+        if not output:
+            output = stdout.decode(errors="replace").strip()
         commands = self._extract_commands(output)
         if not commands:
             raise ValueError("codex CLI returned invalid commands payload")
         return commands, f"codex-cli:{self.codex_model}"
 
     def _extract_commands(self, text: str) -> list[dict[str, Any]]:
-        payload = self._extract_json_payload(text)
-        if isinstance(payload, list):
-            commands = payload
-        elif isinstance(payload, dict):
-            commands = payload.get("commands", [])
-        else:
-            raise ValueError("model returned a non-JSON payload")
+        for payload in self._extract_json_payloads(text):
+            if isinstance(payload, list):
+                commands = payload
+            elif isinstance(payload, dict):
+                commands = payload.get("commands")
+            else:
+                continue
 
-        if not isinstance(commands, list):
-            raise ValueError("model returned invalid commands payload")
-        return self._normalize_commands(commands)
+            if not isinstance(commands, list):
+                continue
 
-    def _extract_json_payload(self, text: str) -> Any:
+            normalized = self._normalize_commands(commands)
+            if normalized:
+                return normalized
+
+        raise ValueError("model returned invalid commands payload")
+
+    def _extract_json_payloads(self, text: str) -> list[Any]:
         stripped = text.strip()
         if not stripped:
             raise ValueError("model returned empty output")
 
+        payloads: list[Any] = []
+        # Prefer whole-line JSON first; Codex CLI prints assistant messages line-by-line.
+        for line in stripped.splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            if candidate[0] not in "{[":
+                start = min(
+                    (idx for idx in (candidate.find("{"), candidate.find("[")) if idx >= 0),
+                    default=-1,
+                )
+                if start < 0:
+                    continue
+                candidate = candidate[start:]
+            try:
+                payloads.append(json.loads(candidate))
+            except Exception:
+                pass
+
         try:
-            return json.loads(stripped)
+            payloads.append(json.loads(stripped))
         except Exception:
             pass
 
@@ -203,9 +301,12 @@ class LLMService:
                 continue
             try:
                 value, _ = decoder.raw_decode(stripped[idx:])
-                return value
+                payloads.append(value)
             except Exception:
                 continue
+
+        if payloads:
+            return payloads
         raise ValueError("model output did not contain valid JSON")
 
     def generate_fallback_patch(self, prompt: str, intent: str) -> list[dict[str, Any]]:

@@ -65,6 +65,17 @@ def _to_literal(value: Any) -> str:
     return str(value)
 
 
+def _to_pattern_expr(pattern: str) -> str:
+    source = pattern.strip()
+    if not source:
+        return repr(pattern)
+    try:
+        ast.parse(source, mode="eval")
+        return source
+    except SyntaxError:
+        return repr(pattern)
+
+
 def emit_python(commands: list[PatchCommand]) -> str:
     lines: list[str] = []
     for command in commands:
@@ -72,15 +83,16 @@ def emit_python(commands: list[PatchCommand]) -> str:
         if op == "set_global":
             lines.append(f"{command.target.value} = {_to_literal(command.value)}")
         elif op == "player_assign":
+            pattern_expr = _to_pattern_expr(command.pattern)
             kwargs = ", ".join(
                 f"{k}={_to_literal(v)}" for k, v in sorted(command.kwargs.items())
             )
             if kwargs:
                 lines.append(
-                    f"{command.player} >> {command.synth}({command.pattern}, {kwargs})"
+                    f"{command.player} >> {command.synth}({pattern_expr}, {kwargs})"
                 )
             else:
-                lines.append(f"{command.player} >> {command.synth}({command.pattern})")
+                lines.append(f"{command.player} >> {command.synth}({pattern_expr})")
         elif op == "player_set":
             lines.append(
                 f"{command.player}.{command.param.value} = {_to_literal(command.value)}"

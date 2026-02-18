@@ -285,14 +285,15 @@ async function copyText(text) {
 
 async function loadLLMSettings() {
   const payload = await api('/api/settings/llm');
-  document.getElementById('llmBackend').value = payload.backend || 'auto';
+  const backend = payload.backend === 'fallback-local' ? 'auto' : (payload.backend || 'auto');
+  document.getElementById('llmBackend').value = backend;
   document.getElementById('llmModel').value = payload.model || '';
   document.getElementById('codexCommand').value = payload.codex_command || '';
   document.getElementById('codexModel').value = payload.codex_model || '';
   document.getElementById('llmApiKey').value = '';
-  updateSettingsDisclosure(payload.backend || 'auto');
+  updateSettingsDisclosure(backend);
   const keyInfo = payload.has_api_key ? `saved ${payload.api_key_hint || ''}` : 'not set';
-  setSettingsStatus(`LLM settings loaded: backend=${payload.backend}, model=${payload.model}, key=${keyInfo}`);
+  setSettingsStatus(`LLM settings loaded: backend=${backend}, model=${payload.model}, key=${keyInfo}`);
 }
 
 async function saveLLMSettings() {
@@ -326,12 +327,6 @@ function updateSettingsDisclosure(backend) {
   const apiKeyRow = document.getElementById('apiKeyRow');
   const advanced = document.getElementById('advancedSettings');
   if (!apiKeyRow || !advanced) return;
-
-  if (backend === 'fallback-local') {
-    apiKeyRow.classList.add('hidden');
-    advanced.classList.add('hidden');
-    return;
-  }
   if (backend === 'openai-api') {
     apiKeyRow.classList.remove('hidden');
     advanced.classList.add('hidden');

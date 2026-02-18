@@ -32,9 +32,6 @@ class _LLMFailingStub:
     async def generate_patch(self, prompt: str, intent: str, state: dict):
         raise RuntimeError("codex CLI binary not found: codex")
 
-    def generate_fallback_patch(self, prompt: str, intent: str):
-        return [{"op": "clock_clear"}]
-
 
 class ChatTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_model_commands_are_normalized_and_applied(self) -> None:
@@ -76,7 +73,7 @@ class ChatTurnTests(unittest.IsolatedAsyncioTestCase):
                 state.current_session_id = old_session_id
                 state.session_state = old_session_state
 
-    async def test_llm_failure_falls_back_instead_of_502(self) -> None:
+    async def test_llm_failure_returns_skipped_and_user_action_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             old_runtime = state.runtime
             old_llm = state.llm
@@ -99,10 +96,11 @@ class ChatTurnTests(unittest.IsolatedAsyncioTestCase):
                 )
                 payload = await chat_turn(request)
 
-                self.assertEqual(payload["model"], "fallback-local")
-                self.assertEqual(payload["apply_status"], "applied")
-                self.assertTrue(payload["validation"]["valid"])
+                self.assertEqual(payload["model"], "llm-failed")
+                self.assertEqual(payload["apply_status"], "skipped")
+                self.assertFalse(payload["validation"]["valid"])
                 self.assertTrue(payload["normalized"])
+                self.assertTrue(payload["needs_user_input"])
                 self.assertTrue(any("LLM backend failed" in n for n in payload["normalization_notes"]))
             finally:
                 state.runtime = old_runtime
