@@ -15,12 +15,15 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.backend.llm_service import LLMService
+from app.backend.command_normalizer import normalize_commands
 from app.backend.renardo_runtime import RenardoRuntime
 from app.backend.safety import validate_and_emit
 from app.backend.store import Store
 from app.shared.contracts import (
     BootResponse,
     ChatTurnRequest,
+    LLMSettingsRequest,
+    LLMSettingsResponse,
     PatchApplyRequest,
     PatchUndoRequest,
     RuntimeLoadSongRequest,
@@ -30,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "app" / "frontend"
 DATA_DIR = ROOT / ".appdata"
 DB_PATH = DATA_DIR / "ai_dj.sqlite3"
+LLM_SETTINGS_PATH = DATA_DIR / "llm_settings.json"
 
 
 @dataclass
@@ -47,6 +51,54 @@ class AppState:
         self.current_session_id = str(uuid.uuid4())
         self.store.ensure_session(self.current_session_id)
         self.session_state = SessionState()
+        self._load_llm_settings()
+
+    def _load_llm_settings(self) -> None:
+        if not LLM_SETTINGS_PATH.exists():
+            return
+        try:
+            payload = json.loads(LLM_SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self.llm.apply_settings(
+            backend=payload.get("backend"),
+            model=payload.get("model"),
+            api_key=payload.get("api_key"),
+            codex_command=payload.get("codex_command"),
+            codex_model=payload.get("codex_model"),
+        )
+
+    def save_llm_settings(self, payload: LLMSettingsRequest) -> dict[str, Any]:
+        next_backend = payload.backend if payload.backend is not None else self.llm.backend
+        next_model = payload.model if payload.model is not None else self.llm.model
+        next_key = payload.api_key if payload.api_key is not None else self.llm.api_key
+        next_codex_command = (
+            payload.codex_command
+            if payload.codex_command is not None
+            else " ".join(self.llm.codex_command)
+        )
+        next_codex_model = (
+            payload.codex_model if payload.codex_model is not None else self.llm.codex_model
+        )
+
+        persisted = {
+            "backend": next_backend,
+            "model": next_model,
+            "api_key": next_key,
+            "codex_command": next_codex_command,
+            "codex_model": next_codex_model,
+        }
+        LLM_SETTINGS_PATH.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
+        self.llm.apply_settings(
+            backend=next_backend,
+            model=next_model,
+            api_key=next_key,
+            codex_command=next_codex_command,
+            codex_model=next_codex_model,
+        )
+        return self.llm.settings_payload()
 
     def publish_event(self, source: str, level: str, message: str, payload: dict[str, Any]) -> None:
         event_payload = {
@@ -178,15 +230,32 @@ async def runtime_ping_sound() -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.get("/api/settings/llm", response_model=LLMSettingsResponse)
+async def llm_settings_get() -> LLMSettingsResponse:
+    return LLMSettingsResponse(**state.llm.settings_payload())
+
+
+@app.post("/api/settings/llm", response_model=LLMSettingsResponse)
+async def llm_settings_update(request: LLMSettingsRequest) -> LLMSettingsResponse:
+    payload = state.save_llm_settings(request)
+    state.publish_event("system", "info", "LLM settings updated", payload)
+    return LLMSettingsResponse(**payload)
+
+
 @app.post("/api/chat/turn")
 async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
     state.store.ensure_session(request.session_id)
     started = time.perf_counter()
+    normalized = False
+    normalization_notes: list[str] = []
+    direct_json = False
+
     try:
         parsed = json.loads(request.prompt)
         if isinstance(parsed, list):
             commands = parsed
             model_name = "direct-json"
+            direct_json = True
         else:
             raise ValueError("prompt JSON was not a command list")
     except Exception:
@@ -200,7 +269,19 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
                 },
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"LLM failure: {exc}") from exc
+            commands = state.llm.generate_fallback_patch(
+                prompt=request.prompt,
+                intent=request.intent.value,
+            )
+            model_name = "fallback-local"
+            normalization_notes.append(f"LLM backend failed; used fallback-local: {exc}")
+            normalized = True
+
+    effective_commands = commands
+    if not direct_json:
+        effective_commands, normalize_notes = normalize_commands(commands)
+        normalization_notes.extend(normalize_notes)
+        normalized = normalized or bool(normalization_notes) or effective_commands != commands
 
     validation_status = "valid"
     apply_status = "pending"
@@ -208,17 +289,36 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
 
     try:
         await state.runtime.ensure_running()
-        emitted_code, errors, revert_commands = await _apply_commands(commands)
+        emitted_code, errors, revert_commands = await _apply_commands(effective_commands)
+        if (
+            errors
+            and direct_json
+            and request.intent.value != "mix_fix"
+            and isinstance(commands, list)
+        ):
+            retry_commands, retry_notes = normalize_commands(commands)
+            if retry_commands != effective_commands or retry_notes:
+                emitted_code, errors, revert_commands = await _apply_commands(retry_commands)
+                effective_commands = retry_commands
+                normalization_notes.extend(retry_notes)
+                normalized = bool(normalization_notes) or effective_commands != commands
         if errors and model_name != "direct-json":
             fallback_commands = state.llm.generate_fallback_patch(
                 prompt=request.prompt,
                 intent=request.intent.value,
             )
+            fallback_effective, fallback_notes = normalize_commands(fallback_commands)
             fallback_emitted_code, fallback_errors, fallback_revert = await _apply_commands(
-                fallback_commands
+                fallback_effective
             )
             if not fallback_errors:
                 commands = fallback_commands
+                effective_commands = fallback_effective
+                normalization_notes.extend(
+                    ["Used fallback-local command repair after model output failed validation"]
+                )
+                normalization_notes.extend(fallback_notes)
+                normalized = bool(normalization_notes) or effective_commands != commands
                 emitted_code = fallback_emitted_code
                 errors = []
                 revert_commands = fallback_revert
@@ -241,6 +341,9 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
     patch_id = state.store.create_patch(
         turn_id=turn_id,
         json_commands=commands,
+        effective_commands=effective_commands,
+        normalized=normalized,
+        normalization_notes=normalization_notes,
         emitted_code=emitted_code,
         validation_status=validation_status,
         apply_status=apply_status,
@@ -254,6 +357,9 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "model": f"{model_name}+fallback-local" if used_fallback_repair else model_name,
         "latency_ms": latency_ms,
         "commands": commands,
+        "effective_commands": effective_commands,
+        "normalized": normalized,
+        "normalization_notes": normalization_notes,
         "validation": {"valid": len(errors) == 0, "errors": errors},
         "apply_status": apply_status,
         "emitted_code": emitted_code,
@@ -267,7 +373,7 @@ async def patch_apply(request: PatchApplyRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="patch not found")
 
     await state.runtime.ensure_running()
-    emitted_code, errors, _ = await _apply_commands(patch["json_commands"])
+    emitted_code, errors, _ = await _apply_commands(patch["effective_commands"])
     if errors:
         return {"ok": False, "errors": errors}
     return {"ok": True, "emitted_code": emitted_code}

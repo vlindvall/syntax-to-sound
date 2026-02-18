@@ -23,11 +23,50 @@ class LLMService:
     def __init__(self) -> None:
         self.backend = os.getenv("AI_DJ_LLM_BACKEND", "auto").strip().lower()
         self.api_key = os.getenv("OPENAI_API_KEY", "")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-5.2-codex")
+
         codex_command = os.getenv("CODEX_CLI_COMMAND", "codex exec")
         self.codex_command = shlex.split(codex_command) if codex_command.strip() else []
         self.codex_model = os.getenv("CODEX_MODEL", self.model)
         self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
+
+    def apply_settings(
+        self,
+        backend: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        codex_command: str | None = None,
+        codex_model: str | None = None,
+    ) -> None:
+        if backend is not None:
+            self.backend = backend.strip().lower()
+        if model is not None:
+            self.model = model.strip()
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        if codex_command is not None:
+            parsed = shlex.split(codex_command) if codex_command.strip() else []
+            self.codex_command = parsed
+        if codex_model is not None:
+            self.codex_model = codex_model.strip()
+
+        if not self.codex_model:
+            self.codex_model = self.model
+        self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
+
+    def settings_payload(self) -> dict[str, Any]:
+        api_key_hint = None
+        if self.api_key:
+            tail = self.api_key[-4:] if len(self.api_key) >= 4 else self.api_key
+            api_key_hint = f"...{tail}"
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "has_api_key": bool(self.api_key),
+            "api_key_hint": api_key_hint,
+            "codex_command": " ".join(self.codex_command),
+            "codex_model": self.codex_model,
+        }
 
     async def generate_patch(
         self,
@@ -51,31 +90,38 @@ class LLMService:
             },
         }
 
-        backend = self._resolve_backend()
-        try:
-            if backend == "openai-api":
-                return await self._generate_openai(user_content)
-            if backend == "codex-cli":
-                return await self._generate_codex_cli(user_content)
-        except Exception:
-            if self.backend != "auto":
-                raise
+        if self.backend == "openai-api":
+            return await self._generate_openai(user_content)
+        if self.backend == "codex-cli":
+            return await self._generate_codex_cli(user_content)
+        if self.backend == "fallback-local":
             return self._fallback_patch(prompt, intent), "fallback-local"
+
+        for backend in self._resolve_backend_chain():
+            try:
+                if backend == "codex-cli":
+                    return await self._generate_codex_cli(user_content)
+                if backend == "openai-api":
+                    return await self._generate_openai(user_content)
+            except Exception:
+                continue
 
         return self._fallback_patch(prompt, intent), "fallback-local"
 
-    def _resolve_backend(self) -> str:
-        if self.backend in {"openai-api", "codex-cli"}:
-            return self.backend
-        if self.api_key:
-            return "openai-api"
+    def _resolve_backend_chain(self) -> list[str]:
+        chain: list[str] = []
         if self.codex_available:
-            return "codex-cli"
-        return "fallback-local"
+            chain.append("codex-cli")
+        if self.api_key:
+            chain.append("openai-api")
+        if not chain:
+            chain.append("fallback-local")
+        return chain
 
     async def _generate_openai(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for openai-api backend")
+
         try:
             from openai import AsyncOpenAI
         except Exception as exc:
@@ -85,7 +131,6 @@ class LLMService:
 
         response = await client.responses.create(
             model=self.model,
-            temperature=0.3,
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(user_content)},
@@ -94,6 +139,8 @@ class LLMService:
         )
 
         commands = self._extract_commands(response.output_text)
+        if not commands:
+            raise ValueError("model returned invalid commands payload")
         return commands, self.model
 
     async def _generate_codex_cli(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -120,8 +167,11 @@ class LLMService:
             raise RuntimeError(
                 f"codex CLI failed with exit code {process.returncode}: {stderr.decode().strip()}"
             )
+
         output = stdout.decode().strip()
         commands = self._extract_commands(output)
+        if not commands:
+            raise ValueError("codex CLI returned invalid commands payload")
         return commands, f"codex-cli:{self.codex_model}"
 
     def _extract_commands(self, text: str) -> list[dict[str, Any]]:
@@ -132,6 +182,7 @@ class LLMService:
             commands = payload.get("commands", [])
         else:
             raise ValueError("model returned a non-JSON payload")
+
         if not isinstance(commands, list):
             raise ValueError("model returned invalid commands payload")
         return self._normalize_commands(commands)
@@ -140,6 +191,7 @@ class LLMService:
         stripped = text.strip()
         if not stripped:
             raise ValueError("model returned empty output")
+
         try:
             return json.loads(stripped)
         except Exception:
@@ -164,16 +216,18 @@ class LLMService:
         for raw in commands:
             if not isinstance(raw, dict):
                 continue
+
             op = str(raw.get("op", "")).strip()
             if not op:
                 continue
+
             command = dict(raw)
 
             if op == "set_global":
                 if "value" not in command and "val" in command:
                     command["value"] = command["val"]
-                target = command.get("target")
-                if target is None:
+
+                if command.get("target") is None:
                     alias = str(command.get("param", command.get("name", ""))).strip().lower()
                     target_map = {
                         "bpm": "Clock.bpm",
@@ -191,6 +245,7 @@ class LLMService:
             elif op == "player_assign":
                 if "synth" not in command and "voice" in command:
                     command["synth"] = command["voice"]
+
                 if "kwargs" not in command:
                     kwargs = command.get("kwargs", {})
                     if not isinstance(kwargs, dict):
@@ -228,21 +283,21 @@ class LLMService:
     def _parse_player_assign_pattern(self, pattern: Any) -> tuple[str, str, dict[str, Any]] | None:
         if not isinstance(pattern, str):
             return None
+
         source = pattern.strip()
         if not re.match(r"^[A-Za-z_]\w*\(.*\)$", source):
             return None
+
         try:
             node = ast.parse(source, mode="eval").body
         except Exception:
             return None
+
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             return None
 
         synth = node.func.id
-        if node.args:
-            pattern_value = ast.unparse(node.args[0])
-        else:
-            pattern_value = "[0,2,4,7]"
+        pattern_value = ast.unparse(node.args[0]) if node.args else "[0,2,4,7]"
 
         kwargs: dict[str, Any] = {}
         for kw in node.keywords:
@@ -252,6 +307,7 @@ class LLMService:
                 kwargs[kw.arg] = ast.literal_eval(kw.value)
             except Exception:
                 kwargs[kw.arg] = ast.unparse(kw.value)
+
         return synth, pattern_value, kwargs
 
     def _fallback_patch(self, prompt: str, intent: str) -> list[dict[str, Any]]:
@@ -267,6 +323,15 @@ class LLMService:
 
         if "stop" in p or "pause" in p:
             return [{"op": "clock_clear"}]
+
+        if "major" in p:
+            commands.append(
+                {"op": "set_global", "target": "Scale.default", "value": "major"}
+            )
+        elif "minor" in p:
+            commands.append(
+                {"op": "set_global", "target": "Scale.default", "value": "minor"}
+            )
 
         if "slower" in p or "slow" in p:
             commands.append({"op": "set_global", "target": "Clock.bpm", "value": 108})
@@ -288,6 +353,37 @@ class LLMService:
                 ]
             )
 
+        if "drum" in p:
+            commands.append(
+                {
+                    "op": "player_assign",
+                    "player": "d1",
+                    "synth": "play",
+                    "pattern": "'x-o-'",
+                    "kwargs": {"dur": 0.5, "amp": 0.8},
+                }
+            )
+
+        if "new song" in p or "new scene" in p:
+            commands = [
+                {"op": "clock_clear"},
+                {"op": "set_global", "target": "Clock.bpm", "value": 124},
+                {
+                    "op": "player_assign",
+                    "player": "p1",
+                    "synth": "pluck",
+                    "pattern": "[0,2,4,7]",
+                    "kwargs": {"dur": 0.25, "amp": 0.7},
+                },
+                {
+                    "op": "player_assign",
+                    "player": "d1",
+                    "synth": "play",
+                    "pattern": "'x-o-'",
+                    "kwargs": {"dur": 0.5, "amp": 0.8},
+                },
+            ]
+
         if not commands:
             commands = [
                 {
@@ -298,4 +394,5 @@ class LLMService:
                     "kwargs": {"dur": 0.25, "amp": 0.7},
                 }
             ]
+
         return commands[:12]

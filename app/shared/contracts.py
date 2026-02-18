@@ -150,3 +150,20 @@ class PatchEnvelope(BaseModel):
         if len(v) > 12:
             raise ValueError("at most 12 commands are allowed per turn")
         return v
+
+
+class LLMSettingsRequest(BaseModel):
+    backend: Literal["auto", "openai-api", "codex-cli", "fallback-local"] | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    api_key: str | None = None
+    codex_command: str | None = Field(default=None, max_length=256)
+    codex_model: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class LLMSettingsResponse(BaseModel):
+    backend: str
+    model: str
+    has_api_key: bool
+    api_key_hint: str | None = None
+    codex_command: str
+    codex_model: str
