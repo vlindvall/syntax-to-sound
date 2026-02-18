@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: venv install app test-app renardo renardo-boot renardo-prepare play live new-song
+.PHONY: venv install app test-app renardo renardo-boot renardo-prepare play live new-song codex
 
 venv:
 	$(PYTHON) -m venv .venv
@@ -43,3 +43,6 @@ new-song:
 		exit 1; \
 	fi
 	$(PYTHON) tools/new_song.py "$(NAME)"
+
+codex:
+	codex

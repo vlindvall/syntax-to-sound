@@ -204,10 +204,27 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
 
     validation_status = "valid"
     apply_status = "pending"
+    used_fallback_repair = False
 
     try:
         await state.runtime.ensure_running()
         emitted_code, errors, revert_commands = await _apply_commands(commands)
+        if errors and model_name != "direct-json":
+            fallback_commands = state.llm.generate_fallback_patch(
+                prompt=request.prompt,
+                intent=request.intent.value,
+            )
+            fallback_emitted_code, fallback_errors, fallback_revert = await _apply_commands(
+                fallback_commands
+            )
+            if not fallback_errors:
+                commands = fallback_commands
+                emitted_code = fallback_emitted_code
+                errors = []
+                revert_commands = fallback_revert
+                apply_status = "applied"
+                validation_status = "valid"
+                used_fallback_repair = True
         if errors:
             validation_status = "invalid"
             emitted_code = ""
@@ -234,7 +251,7 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "session_id": request.session_id,
         "turn_id": turn_id,
         "patch_id": patch_id,
-        "model": model_name,
+        "model": f"{model_name}+fallback-local" if used_fallback_repair else model_name,
         "latency_ms": latency_ms,
         "commands": commands,
         "validation": {"valid": len(errors) == 0, "errors": errors},
