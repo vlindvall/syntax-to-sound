@@ -48,6 +48,9 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIn("b1.detune = 0.2", emitted)
 
+    def test_accepts_negative_literal_assignments(self) -> None:
+        validate_emitted_python("p1.pan = -0.5")
+
 
 if __name__ == "__main__":
     unittest.main()

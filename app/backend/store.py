@@ -43,6 +43,9 @@ class Store:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     turn_id INTEGER NOT NULL,
                     json_commands TEXT NOT NULL,
+                    effective_commands_json TEXT,
+                    normalization_notes_json TEXT,
+                    normalized INTEGER NOT NULL DEFAULT 0,
                     emitted_code TEXT NOT NULL,
                     validation_status TEXT NOT NULL,
                     apply_status TEXT NOT NULL,
@@ -71,6 +74,18 @@ class Store:
                 );
                 """
             )
+            self._migrate_patch_columns(conn)
+
+    def _migrate_patch_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(patches)").fetchall()
+        }
+        if "effective_commands_json" not in columns:
+            conn.execute("ALTER TABLE patches ADD COLUMN effective_commands_json TEXT")
+        if "normalization_notes_json" not in columns:
+            conn.execute("ALTER TABLE patches ADD COLUMN normalization_notes_json TEXT")
+        if "normalized" not in columns:
+            conn.execute("ALTER TABLE patches ADD COLUMN normalized INTEGER NOT NULL DEFAULT 0")
 
     def ensure_session(self, session_id: str) -> None:
         with self._connect() as conn:
@@ -109,6 +124,9 @@ class Store:
         self,
         turn_id: int,
         json_commands: list[dict[str, Any]],
+        effective_commands: list[dict[str, Any]],
+        normalized: bool,
+        normalization_notes: list[str],
         emitted_code: str,
         validation_status: str,
         apply_status: str,
@@ -117,12 +135,25 @@ class Store:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO patches(turn_id, json_commands, emitted_code, validation_status, apply_status, revert_commands)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO patches(
+                    turn_id,
+                    json_commands,
+                    effective_commands_json,
+                    normalization_notes_json,
+                    normalized,
+                    emitted_code,
+                    validation_status,
+                    apply_status,
+                    revert_commands
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
                     json.dumps(json_commands),
+                    json.dumps(effective_commands),
+                    json.dumps(normalization_notes),
+                    1 if normalized else 0,
                     emitted_code,
                     validation_status,
                     apply_status,
@@ -162,7 +193,16 @@ class Store:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, json_commands, emitted_code, validation_status, apply_status, revert_commands
+                SELECT
+                    id,
+                    json_commands,
+                    effective_commands_json,
+                    normalization_notes_json,
+                    normalized,
+                    emitted_code,
+                    validation_status,
+                    apply_status,
+                    revert_commands
                 FROM patches
                 WHERE id=?
                 """,
@@ -170,9 +210,15 @@ class Store:
             ).fetchone()
             if row is None:
                 return None
+            effective_commands = json.loads(row["effective_commands_json"] or "[]")
+            if not effective_commands:
+                effective_commands = json.loads(row["json_commands"])
             return {
                 "id": row["id"],
                 "json_commands": json.loads(row["json_commands"]),
+                "effective_commands": effective_commands,
+                "normalized": bool(row["normalized"]),
+                "normalization_notes": json.loads(row["normalization_notes_json"] or "[]"),
                 "emitted_code": row["emitted_code"],
                 "validation_status": row["validation_status"],
                 "apply_status": row["apply_status"],

@@ -32,6 +32,8 @@ ALLOWED_AST_NODES: tuple[type[ast.AST], ...] = (
     ast.Sub,
     ast.Div,
     ast.Pow,
+    ast.USub,
+    ast.UAdd,
 )
 
 FORBIDDEN_TOKENS = {

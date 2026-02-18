@@ -9,6 +9,8 @@ import shlex
 import shutil
 from typing import Any
 
+from app.shared.contracts import PatchEnvelope
+
 
 SYSTEM_PROMPT = """You are an AI DJ assistant for Renardo live coding.
 Return ONLY JSON with this shape: {\"commands\": [PatchCommand, ...]}.
@@ -23,7 +25,8 @@ class LLMService:
     def __init__(self) -> None:
         self.backend = os.getenv("AI_DJ_LLM_BACKEND", "auto").strip().lower()
         self.api_key = os.getenv("OPENAI_API_KEY", "")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-5.2-codex")
+
         codex_command = os.getenv("CODEX_CLI_COMMAND", "codex exec")
         self.codex_command = shlex.split(codex_command) if codex_command.strip() else []
         self.codex_model = os.getenv("CODEX_MODEL", self.model)
@@ -76,6 +79,7 @@ class LLMService:
     async def _generate_openai(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for openai-api backend")
+
         try:
             from openai import AsyncOpenAI
         except Exception as exc:
@@ -90,10 +94,19 @@ class LLMService:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(user_content)},
             ],
-            text={"format": {"type": "json_object"}},
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "patch_envelope",
+                    "schema": PatchEnvelope.model_json_schema(),
+                    "strict": True,
+                }
+            },
         )
 
         commands = self._extract_commands(response.output_text)
+        if not commands:
+            raise ValueError("model returned invalid commands payload")
         return commands, self.model
 
     async def _generate_codex_cli(self, user_content: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -120,8 +133,11 @@ class LLMService:
             raise RuntimeError(
                 f"codex CLI failed with exit code {process.returncode}: {stderr.decode().strip()}"
             )
+
         output = stdout.decode().strip()
         commands = self._extract_commands(output)
+        if not commands:
+            raise ValueError("codex CLI returned invalid commands payload")
         return commands, f"codex-cli:{self.codex_model}"
 
     def _extract_commands(self, text: str) -> list[dict[str, Any]]:
@@ -132,6 +148,7 @@ class LLMService:
             commands = payload.get("commands", [])
         else:
             raise ValueError("model returned a non-JSON payload")
+
         if not isinstance(commands, list):
             raise ValueError("model returned invalid commands payload")
         return self._normalize_commands(commands)
@@ -140,6 +157,7 @@ class LLMService:
         stripped = text.strip()
         if not stripped:
             raise ValueError("model returned empty output")
+
         try:
             return json.loads(stripped)
         except Exception:
@@ -164,16 +182,18 @@ class LLMService:
         for raw in commands:
             if not isinstance(raw, dict):
                 continue
+
             op = str(raw.get("op", "")).strip()
             if not op:
                 continue
+
             command = dict(raw)
 
             if op == "set_global":
                 if "value" not in command and "val" in command:
                     command["value"] = command["val"]
-                target = command.get("target")
-                if target is None:
+
+                if command.get("target") is None:
                     alias = str(command.get("param", command.get("name", ""))).strip().lower()
                     target_map = {
                         "bpm": "Clock.bpm",
@@ -191,6 +211,7 @@ class LLMService:
             elif op == "player_assign":
                 if "synth" not in command and "voice" in command:
                     command["synth"] = command["voice"]
+
                 if "kwargs" not in command:
                     kwargs = command.get("kwargs", {})
                     if not isinstance(kwargs, dict):
@@ -228,21 +249,21 @@ class LLMService:
     def _parse_player_assign_pattern(self, pattern: Any) -> tuple[str, str, dict[str, Any]] | None:
         if not isinstance(pattern, str):
             return None
+
         source = pattern.strip()
         if not re.match(r"^[A-Za-z_]\w*\(.*\)$", source):
             return None
+
         try:
             node = ast.parse(source, mode="eval").body
         except Exception:
             return None
+
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             return None
 
         synth = node.func.id
-        if node.args:
-            pattern_value = ast.unparse(node.args[0])
-        else:
-            pattern_value = "[0,2,4,7]"
+        pattern_value = ast.unparse(node.args[0]) if node.args else "[0,2,4,7]"
 
         kwargs: dict[str, Any] = {}
         for kw in node.keywords:
@@ -252,6 +273,7 @@ class LLMService:
                 kwargs[kw.arg] = ast.literal_eval(kw.value)
             except Exception:
                 kwargs[kw.arg] = ast.unparse(kw.value)
+
         return synth, pattern_value, kwargs
 
     def _fallback_patch(self, prompt: str, intent: str) -> list[dict[str, Any]]:
@@ -267,6 +289,15 @@ class LLMService:
 
         if "stop" in p or "pause" in p:
             return [{"op": "clock_clear"}]
+
+        if "major" in p:
+            commands.append(
+                {"op": "set_global", "target": "Scale.default", "value": "major"}
+            )
+        elif "minor" in p:
+            commands.append(
+                {"op": "set_global", "target": "Scale.default", "value": "minor"}
+            )
 
         if "slower" in p or "slow" in p:
             commands.append({"op": "set_global", "target": "Clock.bpm", "value": 108})
@@ -288,6 +319,37 @@ class LLMService:
                 ]
             )
 
+        if "drum" in p:
+            commands.append(
+                {
+                    "op": "player_assign",
+                    "player": "d1",
+                    "synth": "play",
+                    "pattern": "'x-o-'",
+                    "kwargs": {"dur": 0.5, "amp": 0.8},
+                }
+            )
+
+        if "new song" in p or "new scene" in p:
+            commands = [
+                {"op": "clock_clear"},
+                {"op": "set_global", "target": "Clock.bpm", "value": 124},
+                {
+                    "op": "player_assign",
+                    "player": "p1",
+                    "synth": "pluck",
+                    "pattern": "[0,2,4,7]",
+                    "kwargs": {"dur": 0.25, "amp": 0.7},
+                },
+                {
+                    "op": "player_assign",
+                    "player": "d1",
+                    "synth": "play",
+                    "pattern": "'x-o-'",
+                    "kwargs": {"dur": 0.5, "amp": 0.8},
+                },
+            ]
+
         if not commands:
             commands = [
                 {
@@ -298,4 +360,5 @@ class LLMService:
                     "kwargs": {"dur": 0.25, "amp": 0.7},
                 }
             ]
+
         return commands[:12]

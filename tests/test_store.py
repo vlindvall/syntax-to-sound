@@ -17,6 +17,9 @@ class StoreTests(unittest.TestCase):
             patch_id = store.create_patch(
                 turn_id,
                 [{"op": "set_global", "target": "Clock.bpm", "value": 108}],
+                [{"op": "set_global", "target": "Clock.bpm", "value": 108}],
+                False,
+                [],
                 "Clock.bpm = 108",
                 "valid",
                 "applied",

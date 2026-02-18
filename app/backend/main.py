@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.backend.llm_service import LLMService
+from app.backend.command_normalizer import normalize_commands
 from app.backend.renardo_runtime import RenardoRuntime
 from app.backend.safety import validate_and_emit
 from app.backend.store import Store
@@ -182,11 +183,16 @@ async def runtime_ping_sound() -> dict[str, Any]:
 async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
     state.store.ensure_session(request.session_id)
     started = time.perf_counter()
+    normalized = False
+    normalization_notes: list[str] = []
+    direct_json = False
+
     try:
         parsed = json.loads(request.prompt)
         if isinstance(parsed, list):
             commands = parsed
             model_name = "direct-json"
+            direct_json = True
         else:
             raise ValueError("prompt JSON was not a command list")
     except Exception:
@@ -202,23 +208,47 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"LLM failure: {exc}") from exc
 
+    effective_commands = commands
+    if not direct_json:
+        effective_commands, normalization_notes = normalize_commands(commands)
+        normalized = bool(normalization_notes) or effective_commands != commands
+
     validation_status = "valid"
     apply_status = "pending"
     used_fallback_repair = False
 
     try:
         await state.runtime.ensure_running()
-        emitted_code, errors, revert_commands = await _apply_commands(commands)
+        emitted_code, errors, revert_commands = await _apply_commands(effective_commands)
+        if (
+            errors
+            and direct_json
+            and request.intent.value != "mix_fix"
+            and isinstance(commands, list)
+        ):
+            retry_commands, retry_notes = normalize_commands(commands)
+            if retry_commands != effective_commands or retry_notes:
+                emitted_code, errors, revert_commands = await _apply_commands(retry_commands)
+                effective_commands = retry_commands
+                normalization_notes.extend(retry_notes)
+                normalized = bool(normalization_notes) or effective_commands != commands
         if errors and model_name != "direct-json":
             fallback_commands = state.llm.generate_fallback_patch(
                 prompt=request.prompt,
                 intent=request.intent.value,
             )
+            fallback_effective, fallback_notes = normalize_commands(fallback_commands)
             fallback_emitted_code, fallback_errors, fallback_revert = await _apply_commands(
-                fallback_commands
+                fallback_effective
             )
             if not fallback_errors:
                 commands = fallback_commands
+                effective_commands = fallback_effective
+                normalization_notes.extend(
+                    ["Used fallback-local command repair after model output failed validation"]
+                )
+                normalization_notes.extend(fallback_notes)
+                normalized = bool(normalization_notes) or effective_commands != commands
                 emitted_code = fallback_emitted_code
                 errors = []
                 revert_commands = fallback_revert
@@ -241,6 +271,9 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
     patch_id = state.store.create_patch(
         turn_id=turn_id,
         json_commands=commands,
+        effective_commands=effective_commands,
+        normalized=normalized,
+        normalization_notes=normalization_notes,
         emitted_code=emitted_code,
         validation_status=validation_status,
         apply_status=apply_status,
@@ -254,6 +287,9 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "model": f"{model_name}+fallback-local" if used_fallback_repair else model_name,
         "latency_ms": latency_ms,
         "commands": commands,
+        "effective_commands": effective_commands,
+        "normalized": normalized,
+        "normalization_notes": normalization_notes,
         "validation": {"valid": len(errors) == 0, "errors": errors},
         "apply_status": apply_status,
         "emitted_code": emitted_code,
@@ -267,7 +303,7 @@ async def patch_apply(request: PatchApplyRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="patch not found")
 
     await state.runtime.ensure_running()
-    emitted_code, errors, _ = await _apply_commands(patch["json_commands"])
+    emitted_code, errors, _ = await _apply_commands(patch["effective_commands"])
     if errors:
         return {"ok": False, "errors": errors}
     return {"ok": True, "emitted_code": emitted_code}
