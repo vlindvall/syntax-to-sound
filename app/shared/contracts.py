@@ -20,11 +20,26 @@ class SetGlobalTarget(str, Enum):
 
 class PlayerParam(str, Enum):
     AMP = "amp"
+    DUR = "dur"
+    SUS = "sus"
+    OCT = "oct"
     LPF = "lpf"
     HPF = "hpf"
     PAN = "pan"
     ROOM = "room"
     MIX = "mix"
+    ECHO = "echo"
+    DELAY = "delay"
+    CHOP = "chop"
+    SAMPLE = "sample"
+    RATE = "rate"
+    DETUNE = "detune"
+    DRIVE = "drive"
+    SHAPE = "shape"
+    BLUR = "blur"
+    FORMANT = "formant"
+    COARSE = "coarse"
+    SPIN = "spin"
 
 
 ALLOWED_PLAYERS = [

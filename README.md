@@ -39,6 +39,34 @@ export OPENAI_MODEL="gpt-4.1-mini"
 
 Without `OPENAI_API_KEY`, the app uses a local fallback patch generator so chat controls still work.
 
+### LLM backend modes
+
+The app now supports two LLM invocation paths:
+
+1. `openai-api` (existing): use `OPENAI_API_KEY`
+2. `codex-cli` (new): shell out to a local Codex CLI process
+
+Backend selection:
+
+```bash
+export AI_DJ_LLM_BACKEND="auto"      # default: openai-api if key exists, else codex-cli if available, else fallback-local
+export AI_DJ_LLM_BACKEND="openai-api"
+export AI_DJ_LLM_BACKEND="codex-cli"
+```
+
+Codex CLI configuration (only needed for `codex-cli`):
+
+```bash
+export CODEX_CLI_COMMAND="codex exec"
+export CODEX_MODEL="gpt-5-codex"
+```
+
+Start a fresh Codex CLI session directly:
+
+```bash
+make codex
+```
+
 ### API surface
 
 - `POST /api/runtime/boot`
