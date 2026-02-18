@@ -56,7 +56,9 @@ class LLMServiceTests(unittest.TestCase):
         sys.modules.pop("openai", None)
 
     def test_resolve_backend_chain_prefers_codex_before_openai(self) -> None:
-        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "app.backend.llm_service.os.access", return_value=True
+        ):
             with patch.dict(
                 "os.environ",
                 {
@@ -70,7 +72,9 @@ class LLMServiceTests(unittest.TestCase):
                 self.assertEqual(service._resolve_backend_chain(), ["codex-cli", "openai-api"])
 
     def test_resolve_backend_uses_codex_cli_when_available(self) -> None:
-        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "app.backend.llm_service.os.access", return_value=True
+        ):
             with patch.dict(
                 "os.environ",
                 {
@@ -83,8 +87,35 @@ class LLMServiceTests(unittest.TestCase):
                 service = LLMService()
                 self.assertEqual(service._resolve_backend_chain(), ["codex-cli"])
 
+    def test_resolve_backend_finds_codex_in_common_paths_when_path_missing(self) -> None:
+        def _which(name, path=None):  # type: ignore[no-untyped-def]
+            if name != "codex":
+                return None
+            if path and "/opt/homebrew/bin" in path:
+                return "/opt/homebrew/bin/codex"
+            return None
+
+        with patch("app.backend.llm_service.shutil.which", side_effect=_which), patch(
+            "app.backend.llm_service.os.access", return_value=True
+        ):
+            with patch.dict(
+                "os.environ",
+                {
+                    "AI_DJ_LLM_BACKEND": "auto",
+                    "OPENAI_API_KEY": "",
+                    "CODEX_CLI_COMMAND": "codex exec",
+                    "PATH": "/usr/sbin:/sbin",
+                },
+                clear=True,
+            ):
+                service = LLMService()
+                self.assertEqual(service.codex_command[0], "/opt/homebrew/bin/codex")
+                self.assertEqual(service._resolve_backend_chain(), ["codex-cli"])
+
     def test_auto_falls_back_from_codex_to_openai(self) -> None:
-        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "app.backend.llm_service.os.access", return_value=True
+        ):
             with patch.dict(
                 "os.environ",
                 {
@@ -151,59 +182,60 @@ class LLMServiceTests(unittest.TestCase):
         self.assertEqual(commands[0]["kwargs"]["dur"], 0.25)
 
     def test_invalid_model_payload_falls_back(self) -> None:
-        os.environ["OPENAI_API_KEY"] = "test-key"
+        with patch("app.backend.llm_service.shutil.which", return_value=None):
+            os.environ["OPENAI_API_KEY"] = "test-key"
 
-        fake_mod = types.ModuleType("openai")
-        fake_mod.AsyncOpenAI = lambda api_key: _FakeAsyncOpenAI(  # type: ignore[attr-defined]
-            api_key,
-            '{"foo":"bar"}',
-            False,
-        )
-        sys.modules["openai"] = fake_mod
-
-        service = LLMService()
-        commands, model = asyncio.run(service.generate_patch("slow it down", "edit"))
-
-        self.assertEqual(model, "fallback-local")
-        self.assertTrue(commands)
-
-    def test_fallback_supports_major_key(self) -> None:
-        os.environ.pop("OPENAI_API_KEY", None)
-        service = LLMService()
-        commands, model = asyncio.run(service.generate_patch("make it major key", "edit"))
-        self.assertEqual(model, "fallback-local")
-        self.assertTrue(
-            any(
-                cmd.get("op") == "set_global"
-                and cmd.get("target") == "Scale.default"
-                and cmd.get("value") == "major"
-                for cmd in commands
+            fake_mod = types.ModuleType("openai")
+            fake_mod.AsyncOpenAI = lambda api_key: _FakeAsyncOpenAI(  # type: ignore[attr-defined]
+                api_key,
+                '{"foo":"bar"}',
+                False,
             )
-        )
+            sys.modules["openai"] = fake_mod
 
-    def test_fallback_supports_drums(self) -> None:
-        os.environ.pop("OPENAI_API_KEY", None)
-        service = LLMService()
-        commands, model = asyncio.run(service.generate_patch("add some drums", "edit"))
-        self.assertEqual(model, "fallback-local")
-        self.assertTrue(
-            any(
-                cmd.get("op") == "player_assign"
-                and cmd.get("player") == "d1"
-                and cmd.get("synth") == "play"
-                for cmd in commands
+            service = LLMService()
+            with self.assertRaisesRegex(RuntimeError, "all LLM backends failed"):
+                asyncio.run(service.generate_patch("slow it down", "edit"))
+
+    def test_generate_fallback_patch_supports_major_key(self) -> None:
+        with patch("app.backend.llm_service.shutil.which", return_value=None):
+            os.environ.pop("OPENAI_API_KEY", None)
+            service = LLMService()
+            commands = service.generate_fallback_patch("make it major key", "edit")
+            self.assertTrue(
+                any(
+                    cmd.get("op") == "set_global"
+                    and cmd.get("target") == "Scale.default"
+                    and cmd.get("value") == "major"
+                    for cmd in commands
+                )
             )
-        )
 
-    def test_fallback_supports_new_song_scene(self) -> None:
-        os.environ.pop("OPENAI_API_KEY", None)
-        service = LLMService()
-        commands, model = asyncio.run(service.generate_patch("make a new song", "new_scene"))
-        self.assertEqual(model, "fallback-local")
-        self.assertEqual(commands[0]["op"], "clock_clear")
+    def test_generate_fallback_patch_supports_drums(self) -> None:
+        with patch("app.backend.llm_service.shutil.which", return_value=None):
+            os.environ.pop("OPENAI_API_KEY", None)
+            service = LLMService()
+            commands = service.generate_fallback_patch("add some drums", "edit")
+            self.assertTrue(
+                any(
+                    cmd.get("op") == "player_assign"
+                    and cmd.get("player") == "d1"
+                    and cmd.get("synth") == "play"
+                    for cmd in commands
+                )
+            )
+
+    def test_generate_fallback_patch_supports_new_song_scene(self) -> None:
+        with patch("app.backend.llm_service.shutil.which", return_value=None):
+            os.environ.pop("OPENAI_API_KEY", None)
+            service = LLMService()
+            commands = service.generate_fallback_patch("make a new song", "new_scene")
+            self.assertEqual(commands[0]["op"], "clock_clear")
 
     def test_generate_codex_cli_uses_cli_output(self) -> None:
-        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"):
+        with patch("app.backend.llm_service.shutil.which", return_value="/usr/local/bin/codex"), patch(
+            "app.backend.llm_service.os.access", return_value=True
+        ):
             with patch.dict(
                 "os.environ",
                 {
@@ -224,10 +256,21 @@ class LLMServiceTests(unittest.TestCase):
                 with patch(
                     "app.backend.llm_service.asyncio.create_subprocess_exec",
                     AsyncMock(return_value=fake_process),
-                ):
+                ) as create_proc:
                     commands, model = asyncio.run(service.generate_patch("stop", "edit"))
                     self.assertEqual(commands, [{"op": "clock_clear"}])
                     self.assertEqual(model, "codex-cli:gpt-5-codex")
+                    args = create_proc.await_args.args
+                    self.assertIn("--output-last-message", args)
+
+    def test_extract_commands_ignores_non_command_json_before_valid_payload(self) -> None:
+        service = LLMService()
+        output = (
+            'user {"intent":"edit","prompt":"stop","schema_hint":{"commands":[{"op":"player_set"}]}}\n'
+            'assistant {"commands":[{"op":"clock_clear"}]}'
+        )
+        commands = service._extract_commands(output)
+        self.assertEqual(commands, [{"op": "clock_clear"}])
 
 
 if __name__ == "__main__":

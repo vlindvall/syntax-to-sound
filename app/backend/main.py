@@ -249,6 +249,7 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
     normalized = False
     normalization_notes: list[str] = []
     direct_json = False
+    backend_failure: str | None = None
 
     try:
         parsed = json.loads(request.prompt)
@@ -269,12 +270,10 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
                 },
             )
         except Exception as exc:
-            commands = state.llm.generate_fallback_patch(
-                prompt=request.prompt,
-                intent=request.intent.value,
-            )
-            model_name = "fallback-local"
-            normalization_notes.append(f"LLM backend failed; used fallback-local: {exc}")
+            commands = []
+            model_name = "llm-failed"
+            backend_failure = str(exc)
+            normalization_notes.append(f"LLM backend failed: {exc}")
             normalized = True
 
     effective_commands = commands
@@ -285,56 +284,43 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
 
     validation_status = "valid"
     apply_status = "pending"
-    used_fallback_repair = False
+    errors: list[str] = []
+    emitted_code = ""
+    revert_commands: list[dict[str, Any]] = []
 
-    try:
-        await state.runtime.ensure_running()
-        emitted_code, errors, revert_commands = await _apply_commands(effective_commands)
-        if (
-            errors
-            and direct_json
-            and request.intent.value != "mix_fix"
-            and isinstance(commands, list)
-        ):
-            retry_commands, retry_notes = normalize_commands(commands)
-            if retry_commands != effective_commands or retry_notes:
-                emitted_code, errors, revert_commands = await _apply_commands(retry_commands)
-                effective_commands = retry_commands
-                normalization_notes.extend(retry_notes)
-                normalized = bool(normalization_notes) or effective_commands != commands
-        if errors and model_name != "direct-json":
-            fallback_commands = state.llm.generate_fallback_patch(
-                prompt=request.prompt,
-                intent=request.intent.value,
-            )
-            fallback_effective, fallback_notes = normalize_commands(fallback_commands)
-            fallback_emitted_code, fallback_errors, fallback_revert = await _apply_commands(
-                fallback_effective
-            )
-            if not fallback_errors:
-                commands = fallback_commands
-                effective_commands = fallback_effective
-                normalization_notes.extend(
-                    ["Used fallback-local command repair after model output failed validation"]
+    if not effective_commands:
+        validation_status = "invalid"
+        apply_status = "skipped"
+        errors = [backend_failure or "LLM returned no commands"]
+    else:
+        try:
+            await state.runtime.ensure_running()
+            emitted_code, errors, revert_commands = await _apply_commands(effective_commands)
+            if (
+                errors
+                and direct_json
+                and request.intent.value != "mix_fix"
+                and isinstance(commands, list)
+            ):
+                retry_commands, retry_notes = normalize_commands(commands)
+                if retry_commands != effective_commands or retry_notes:
+                    emitted_code, errors, revert_commands = await _apply_commands(retry_commands)
+                    effective_commands = retry_commands
+                    normalization_notes.extend(retry_notes)
+                    normalized = bool(normalization_notes) or effective_commands != commands
+            if errors:
+                validation_status = "invalid"
+                emitted_code = ""
+                apply_status = "skipped"
+                normalization_notes.append(
+                    "Model output failed validation. Edit your prompt and retry to self-heal."
                 )
-                normalization_notes.extend(fallback_notes)
-                normalized = bool(normalization_notes) or effective_commands != commands
-                emitted_code = fallback_emitted_code
-                errors = []
-                revert_commands = fallback_revert
+            else:
                 apply_status = "applied"
-                validation_status = "valid"
-                used_fallback_repair = True
-        if errors:
-            validation_status = "invalid"
+        except Exception as exc:
             emitted_code = ""
-            apply_status = "skipped"
-        else:
-            apply_status = "applied"
-    except Exception as exc:
-        emitted_code = ""
-        errors = [str(exc)]
-        apply_status = "failed"
+            errors = [str(exc)]
+            apply_status = "failed"
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     turn_id = state.store.create_turn(request.session_id, request.prompt, model_name, latency_ms)
@@ -354,7 +340,7 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "session_id": request.session_id,
         "turn_id": turn_id,
         "patch_id": patch_id,
-        "model": f"{model_name}+fallback-local" if used_fallback_repair else model_name,
+        "model": model_name,
         "latency_ms": latency_ms,
         "commands": commands,
         "effective_commands": effective_commands,
@@ -363,6 +349,7 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "validation": {"valid": len(errors) == 0, "errors": errors},
         "apply_status": apply_status,
         "emitted_code": emitted_code,
+        "needs_user_input": apply_status != "applied",
     }
 
 

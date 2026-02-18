@@ -51,6 +51,20 @@ class SafetyTests(unittest.TestCase):
     def test_accepts_negative_literal_assignments(self) -> None:
         validate_emitted_python("p1.pan = -0.5")
 
+    def test_player_assign_pattern_plain_text_is_quoted(self) -> None:
+        commands = [
+            {
+                "op": "player_assign",
+                "player": "p1",
+                "synth": "play",
+                "pattern": "x-(-[--])o-",
+                "kwargs": {},
+            }
+        ]
+        _, emitted, errors = validate_and_emit(commands)
+        self.assertEqual(errors, [])
+        self.assertIn("p1 >> play('x-(-[--])o-')", emitted)
+
 
 if __name__ == "__main__":
     unittest.main()

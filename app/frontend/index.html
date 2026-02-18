@@ -27,14 +27,13 @@
         </div>
         <div class="settings-wrap">
           <h3>LLM Settings</h3>
-          <p class="settings-help">Quick mode: use <code>auto</code> (tries codex-cli, then OpenAI API, then local fallback).</p>
+          <p class="settings-help">Quick mode: use <code>auto</code> (tries codex-cli, then OpenAI API). If both fail, the app asks for prompt edits.</p>
           <div class="row">
             <label for="llmBackend">Backend</label>
             <select id="llmBackend">
               <option value="auto">auto</option>
               <option value="openai-api">openai-api</option>
               <option value="codex-cli">codex-cli</option>
-              <option value="fallback-local">fallback-local</option>
             </select>
           </div>
           <div class="row">
