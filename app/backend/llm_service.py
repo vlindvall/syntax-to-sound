@@ -32,6 +32,44 @@ class LLMService:
         self.codex_model = os.getenv("CODEX_MODEL", self.model)
         self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
 
+    def apply_settings(
+        self,
+        backend: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        codex_command: str | None = None,
+        codex_model: str | None = None,
+    ) -> None:
+        if backend is not None:
+            self.backend = backend.strip().lower()
+        if model is not None:
+            self.model = model.strip()
+        if api_key is not None:
+            self.api_key = api_key.strip()
+        if codex_command is not None:
+            parsed = shlex.split(codex_command) if codex_command.strip() else []
+            self.codex_command = parsed
+        if codex_model is not None:
+            self.codex_model = codex_model.strip()
+
+        if not self.codex_model:
+            self.codex_model = self.model
+        self.codex_available = bool(self.codex_command) and shutil.which(self.codex_command[0]) is not None
+
+    def settings_payload(self) -> dict[str, Any]:
+        api_key_hint = None
+        if self.api_key:
+            tail = self.api_key[-4:] if len(self.api_key) >= 4 else self.api_key
+            api_key_hint = f"...{tail}"
+        return {
+            "backend": self.backend,
+            "model": self.model,
+            "has_api_key": bool(self.api_key),
+            "api_key_hint": api_key_hint,
+            "codex_command": " ".join(self.codex_command),
+            "codex_model": self.codex_model,
+        }
+
     async def generate_patch(
         self,
         prompt: str,

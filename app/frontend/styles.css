@@ -35,6 +35,13 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 .subtitle { color: var(--muted); margin-top: 0; }
 .row { display: flex; gap: 8px; margin: 8px 0; }
 .row input, .row select { flex: 1; }
+.row label {
+  min-width: 108px;
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+}
 .panel-head {
   display: flex;
   justify-content: space-between;
@@ -81,6 +88,13 @@ button.secondary {
 .msg { margin: 6px 0; padding: 6px 8px; border-radius: 6px; }
 .msg.user { background: #1d3441; }
 .msg.system { background: #2c1f38; }
+.settings-wrap {
+  border: 1px solid #2b374b;
+  border-radius: 8px;
+  background: #0f1520;
+  padding: 8px;
+  margin: 10px 0;
+}
 .trace-wrap {
   margin: 8px 0;
   border: 1px solid #2b374b;

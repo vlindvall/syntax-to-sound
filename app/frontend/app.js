@@ -1,4 +1,5 @@
 const statusLine = document.getElementById('statusLine');
+const settingsStatus = document.getElementById('settingsStatus');
 const messages = document.getElementById('messages');
 const eventsBox = document.getElementById('eventsBox');
 let traceList = document.getElementById('traceList');
@@ -35,6 +36,7 @@ async function boot() {
   sessionId = data.session_id;
   statusLine.textContent = `Status: ${data.status} (${sessionId})`;
   logMessage('system', `Boot: ${data.status}`);
+  await loadLLMSettings();
 }
 
 async function stop() {
@@ -281,6 +283,43 @@ async function copyText(text) {
   logMessage('system', 'Copied trace to clipboard');
 }
 
+async function loadLLMSettings() {
+  const payload = await api('/api/settings/llm');
+  document.getElementById('llmBackend').value = payload.backend || 'auto';
+  document.getElementById('llmModel').value = payload.model || '';
+  document.getElementById('codexCommand').value = payload.codex_command || '';
+  document.getElementById('codexModel').value = payload.codex_model || '';
+  document.getElementById('llmApiKey').value = '';
+  const keyInfo = payload.has_api_key ? `saved ${payload.api_key_hint || ''}` : 'not set';
+  setSettingsStatus(`LLM settings loaded: backend=${payload.backend}, model=${payload.model}, key=${keyInfo}`);
+}
+
+async function saveLLMSettings() {
+  const apiKeyInput = document.getElementById('llmApiKey').value.trim();
+  const request = {
+    backend: document.getElementById('llmBackend').value,
+    model: document.getElementById('llmModel').value.trim(),
+    codex_command: document.getElementById('codexCommand').value.trim(),
+    codex_model: document.getElementById('codexModel').value.trim(),
+  };
+  if (apiKeyInput.length > 0) {
+    request.api_key = apiKeyInput;
+  }
+
+  const payload = await api('/api/settings/llm', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+  document.getElementById('llmApiKey').value = '';
+  const keyInfo = payload.has_api_key ? `saved ${payload.api_key_hint || ''}` : 'not set';
+  setSettingsStatus(`LLM settings saved: backend=${payload.backend}, model=${payload.model}, key=${keyInfo}`);
+  logMessage('system', `LLM settings updated (${payload.backend})`);
+}
+
+function setSettingsStatus(text) {
+  if (settingsStatus) settingsStatus.textContent = text;
+}
+
 function appendTraceStage(parent, title, payload) {
   const label = document.createElement('div');
   label.className = 'trace-stage-title';
@@ -341,6 +380,10 @@ document.getElementById('sendBtn').onclick = () => sendPrompt().catch((e) => log
 document.getElementById('applyMixerBtn').onclick = () => applyMixer().catch((e) => logMessage('system', e.message));
 document.getElementById('bpmBtn').onclick = () => setBpm().catch((e) => logMessage('system', e.message));
 document.getElementById('undoBtn').onclick = () => undoLast().catch((e) => logMessage('system', e.message));
+document.getElementById('refreshSettingsBtn').onclick = () =>
+  loadLLMSettings().catch((e) => logMessage('system', e.message));
+document.getElementById('saveSettingsBtn').onclick = () =>
+  saveLLMSettings().catch((e) => logMessage('system', e.message));
 const clearTraceBtn = document.getElementById('clearTraceBtn');
 if (clearTraceBtn) {
   clearTraceBtn.onclick = () => {

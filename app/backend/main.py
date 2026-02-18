@@ -22,6 +22,8 @@ from app.backend.store import Store
 from app.shared.contracts import (
     BootResponse,
     ChatTurnRequest,
+    LLMSettingsRequest,
+    LLMSettingsResponse,
     PatchApplyRequest,
     PatchUndoRequest,
     RuntimeLoadSongRequest,
@@ -31,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "app" / "frontend"
 DATA_DIR = ROOT / ".appdata"
 DB_PATH = DATA_DIR / "ai_dj.sqlite3"
+LLM_SETTINGS_PATH = DATA_DIR / "llm_settings.json"
 
 
 @dataclass
@@ -48,6 +51,54 @@ class AppState:
         self.current_session_id = str(uuid.uuid4())
         self.store.ensure_session(self.current_session_id)
         self.session_state = SessionState()
+        self._load_llm_settings()
+
+    def _load_llm_settings(self) -> None:
+        if not LLM_SETTINGS_PATH.exists():
+            return
+        try:
+            payload = json.loads(LLM_SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self.llm.apply_settings(
+            backend=payload.get("backend"),
+            model=payload.get("model"),
+            api_key=payload.get("api_key"),
+            codex_command=payload.get("codex_command"),
+            codex_model=payload.get("codex_model"),
+        )
+
+    def save_llm_settings(self, payload: LLMSettingsRequest) -> dict[str, Any]:
+        next_backend = payload.backend if payload.backend is not None else self.llm.backend
+        next_model = payload.model if payload.model is not None else self.llm.model
+        next_key = payload.api_key if payload.api_key is not None else self.llm.api_key
+        next_codex_command = (
+            payload.codex_command
+            if payload.codex_command is not None
+            else " ".join(self.llm.codex_command)
+        )
+        next_codex_model = (
+            payload.codex_model if payload.codex_model is not None else self.llm.codex_model
+        )
+
+        persisted = {
+            "backend": next_backend,
+            "model": next_model,
+            "api_key": next_key,
+            "codex_command": next_codex_command,
+            "codex_model": next_codex_model,
+        }
+        LLM_SETTINGS_PATH.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
+        self.llm.apply_settings(
+            backend=next_backend,
+            model=next_model,
+            api_key=next_key,
+            codex_command=next_codex_command,
+            codex_model=next_codex_model,
+        )
+        return self.llm.settings_payload()
 
     def publish_event(self, source: str, level: str, message: str, payload: dict[str, Any]) -> None:
         event_payload = {
@@ -177,6 +228,18 @@ async def runtime_ping_sound() -> dict[str, Any]:
     )
     await state.runtime.send_lines(source)
     return {"ok": True}
+
+
+@app.get("/api/settings/llm", response_model=LLMSettingsResponse)
+async def llm_settings_get() -> LLMSettingsResponse:
+    return LLMSettingsResponse(**state.llm.settings_payload())
+
+
+@app.post("/api/settings/llm", response_model=LLMSettingsResponse)
+async def llm_settings_update(request: LLMSettingsRequest) -> LLMSettingsResponse:
+    payload = state.save_llm_settings(request)
+    state.publish_event("system", "info", "LLM settings updated", payload)
+    return LLMSettingsResponse(**payload)
 
 
 @app.post("/api/chat/turn")

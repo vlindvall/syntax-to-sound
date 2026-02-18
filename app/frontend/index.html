@@ -25,6 +25,39 @@
           <input id="bpmInput" type="number" min="50" max="220" value="120" />
           <button id="bpmBtn">Set</button>
         </div>
+        <div class="settings-wrap">
+          <h3>LLM Settings</h3>
+          <div class="row">
+            <label for="llmBackend">Backend</label>
+            <select id="llmBackend">
+              <option value="auto">auto</option>
+              <option value="openai-api">openai-api</option>
+              <option value="codex-cli">codex-cli</option>
+              <option value="fallback-local">fallback-local</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="llmModel">Model</label>
+            <input id="llmModel" placeholder="gpt-5.2-codex" />
+          </div>
+          <div class="row">
+            <label for="llmApiKey">OpenAI Key</label>
+            <input id="llmApiKey" type="password" placeholder="sk-..." />
+          </div>
+          <div class="row">
+            <label for="codexCommand">Codex CLI Cmd</label>
+            <input id="codexCommand" placeholder="codex exec" />
+          </div>
+          <div class="row">
+            <label for="codexModel">Codex CLI Model</label>
+            <input id="codexModel" placeholder="gpt-5.2-codex" />
+          </div>
+          <div class="row">
+            <button id="refreshSettingsBtn" class="secondary">Refresh Settings</button>
+            <button id="saveSettingsBtn">Save Settings</button>
+          </div>
+          <p id="settingsStatus" class="subtitle">LLM settings: loading...</p>
+        </div>
         <p id="statusLine">Status: idle</p>
       </section>
 
