@@ -21,6 +21,7 @@ from app.backend.safety import validate_and_emit
 from app.backend.store import Store
 from app.shared.contracts import (
     BootResponse,
+    ChatTroubleshootRequest,
     ChatTurnRequest,
     LLMSettingsRequest,
     LLMSettingsResponse,
@@ -51,6 +52,7 @@ class AppState:
         self.current_session_id = str(uuid.uuid4())
         self.store.ensure_session(self.current_session_id)
         self.session_state = SessionState()
+        self.troubleshoot_usage: dict[str, int] = {}
         self._load_llm_settings()
 
     def _load_llm_settings(self) -> None:
@@ -133,6 +135,7 @@ async def index() -> FileResponse:
 
 
 app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR)), name="assets")
+TROUBLESHOOT_LIMIT_PER_SESSION = 3
 
 
 def _compute_revert(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -350,6 +353,54 @@ async def chat_turn(request: ChatTurnRequest) -> dict[str, Any]:
         "apply_status": apply_status,
         "emitted_code": emitted_code,
         "needs_user_input": apply_status != "applied",
+    }
+
+
+@app.post("/api/chat/troubleshoot")
+async def chat_troubleshoot(request: ChatTroubleshootRequest) -> dict[str, Any]:
+    state.store.ensure_session(request.session_id)
+    used = state.troubleshoot_usage.get(request.session_id, 0)
+    if used >= TROUBLESHOOT_LIMIT_PER_SESSION:
+        raise HTTPException(
+            status_code=429,
+            detail=f"troubleshoot budget exhausted ({TROUBLESHOOT_LIMIT_PER_SESSION} per session)",
+        )
+
+    repaired_commands, model_name, reason, confidence = await state.llm.generate_repair_commands(
+        prompt=request.prompt,
+        intent=request.intent.value,
+        state={
+            "globals": state.session_state.globals,
+            "players": state.session_state.players,
+        },
+        failed_commands=request.failed_commands,
+        validation_errors=request.validation_errors,
+    )
+
+    effective_commands, normalization_notes = normalize_commands(repaired_commands)
+    _, emitted_code, errors = validate_and_emit(effective_commands)
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"repair output still invalid: {'; '.join(errors)}",
+        )
+
+    used += 1
+    state.troubleshoot_usage[request.session_id] = used
+
+    return {
+        "ok": True,
+        "model": model_name,
+        "reason": reason,
+        "confidence": confidence,
+        "fixed_commands": effective_commands,
+        "emitted_code_preview": emitted_code,
+        "normalization_notes": normalization_notes,
+        "budget": {
+            "used": used,
+            "limit": TROUBLESHOOT_LIMIT_PER_SESSION,
+            "remaining": max(0, TROUBLESHOOT_LIMIT_PER_SESSION - used),
+        },
     }
 
 

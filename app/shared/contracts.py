@@ -131,6 +131,14 @@ class PatchUndoRequest(BaseModel):
     session_id: str
 
 
+class ChatTroubleshootRequest(BaseModel):
+    session_id: str
+    prompt: str = Field(min_length=1, max_length=2000)
+    intent: Intent = Intent.EDIT
+    failed_commands: list[dict[str, object]] = Field(default_factory=list)
+    validation_errors: list[str] = Field(default_factory=list, max_length=12)
+
+
 class BootResponse(BaseModel):
     status: Literal["ready", "starting", "error"]
     session_id: str
